@@ -12,3 +12,5 @@ test/data/functiontest.xml
 test/data/securetest.xml
 .pydevproject
 *.css
+
+*~
