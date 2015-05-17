@@ -45,6 +45,8 @@
 #include "Unordered.h"
 #include "rpc/SaslClient.h"
 
+#include <string>
+
 #ifdef MOCK
 #include "TestDatanodeStub.h"
 #endif
@@ -109,6 +111,8 @@ public:
      */
     std::string toString();
 
+    void setHostname(std::string hostname);
+
 private:
     bool choseBestNode();
     bool isLocalNode();
@@ -149,6 +153,7 @@ private:
     std::vector<DatanodeInfo> failedNodes;
     std::vector<char> localReaderBuffer;
     shared_ptr<AESClient> aesClient;
+    std::string hostname;
 
 #ifdef MOCK
 private:

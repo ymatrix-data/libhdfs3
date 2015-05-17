@@ -321,6 +321,11 @@ bool InputStreamImpl::choseBestNode() {
             continue;
         }
 
+        if(!hostname.empty() && hostname.compare(nodes[i].getHostName()) != 0) {
+            continue;
+        }
+
+        LOG(INFO, "Choosing node %s", nodes[i].getHostName().c_str());
         curNode = nodes[i];
         return true;
     }
@@ -841,6 +846,10 @@ std::string InputStreamImpl::toString() {
         return std::string("InputStream (not opened)");
     }
 }
+
+    void InputStreamImpl::setHostname(std::string hostname) {
+        hostname = hostname;
+    }
 
 }
 }
