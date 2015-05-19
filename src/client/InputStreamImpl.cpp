@@ -849,7 +849,6 @@ std::string InputStreamImpl::toString() {
 
     void InputStreamImpl::setHostname(std::string hostname) {
         this->hostname = hostname;
-		printf("Set hostname %s\n", hostname.c_str());
     }
 
 }
