@@ -325,7 +325,7 @@ bool InputStreamImpl::choseBestNode() {
             continue;
         }
 
-        LOG(INFO, "Choosing node %s (%s)", nodes[i].getHostName().c_str(), hostname.c_str());
+        //LOG(INFO, "Choosing node %s (%s)", nodes[i].getHostName().c_str(), hostname.c_str());
         curNode = nodes[i];
         return true;
     }
