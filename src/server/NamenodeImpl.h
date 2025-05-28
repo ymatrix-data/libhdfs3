@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -161,7 +155,7 @@ public:
     void metaSave(const std::string & filename) /* throw (HdfsIOException) */;
 
     //Idempotent
-    FileStatus getFileInfo(const std::string & src)
+    FileStatus getFileInfo(const std::string & src, bool *exist)
     /* throw (AccessControlException, FileNotFoundException,
      UnresolvedLinkException, HdfsIOException) */;
 
@@ -223,6 +217,17 @@ public:
     //Idempotent
     void cancelDelegationToken(const Token & token)
     /*throws IOException*/;
+
+    EncryptionKey getEncryptionKeys();
+
+    bool createEncryptionZone(const std::string & src, const std::string & keyName);
+    /* throws HdfsIOException If an I/O error occurred */
+
+    EncryptionZoneInfo getEncryptionZoneInfo(const std::string & src, bool *exist);
+    /* throw (FileNotFoundException, UnresolvedLinkException, HdfsIOException) */     
+    bool listEncryptionZones(const int64_t id, std::vector<EncryptionZoneInfo> & ezl);
+    /* throw (AccessControlException, UnresolvedLinkException, HdfsIOException) */ 
+
 
 private:
     void invoke(const RpcCall & call);

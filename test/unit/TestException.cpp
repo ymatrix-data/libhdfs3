@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -116,6 +110,7 @@ TEST(TestException, NestedErrorDetails) {
             NESTED_THROW(HdfsException, "nested HdfsException");
         }
     } catch (const HdfsException & e) {
-        std::cout << GetExceptionDetail(e) << std::endl;
+        std::string buffer;
+        std::cout << GetExceptionDetail(e, buffer) << std::endl;
     }
 }

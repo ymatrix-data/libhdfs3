@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -38,6 +32,7 @@
 #include "XmlConfig.h"
 
 #include <ctime>
+#include <string.h>
 
 #ifndef TEST_HDFS_PREFIX
 #define TEST_HDFS_PREFIX "./"
@@ -110,6 +105,19 @@ TEST_F(TestFileSystem, rename) {
     ASSERT_THROW(fs->rename(NULL, NULL), InvalidParameter);
 }
 
+TEST_F(TestFileSystem, concat) {
+    const char *srcs[2];
+    srcs[0] = "";
+    srcs[1] = NULL;
+    ASSERT_THROW(fs->concat("/test1/testa", NULL), InvalidParameter);
+    ASSERT_THROW(fs->concat("/test1/testa", &srcs[0]), InvalidParameter);
+    srcs[0] = "concat_test";
+    ASSERT_THROW(fs->concat(NULL, &srcs[0]), InvalidParameter);
+    ASSERT_THROW(fs->concat(NULL, NULL), InvalidParameter);
+    srcs[0] = "";
+    ASSERT_THROW(fs->concat(NULL, &srcs[0]), InvalidParameter);
+}
+
 TEST_F(TestFileSystem, getDefaultReplication) {
     ASSERT_NO_THROW(fs->getDefaultReplication());
     ASSERT_EQ(fs->getDefaultReplication(), 3);
@@ -142,6 +150,39 @@ TEST_F(TestFileSystem, listDirectory) {
 
     DirectoryIterator it;
     EXPECT_NO_THROW(it = fs->listDirectory(BASE_DIR"testListDir/"));
+    int count = 0;
+
+    while (it.hasNext()) {
+        count ++;
+        it.getNext();
+    }
+
+    ASSERT_EQ(dirs, count);
+    ASSERT_THROW(it.getNext(), HdfsIOException);
+}
+
+TEST_F(TestFileSystem, DISABLED_listEncryptionZone) {
+    fs->disconnect();
+    fs->connect();
+    const int dirs = 201;
+
+    for (int i = 0; i < dirs; i++){
+        std::stringstream newstr;
+        newstr << i;
+        std::string tde = "/TDE" + newstr.str();
+        std::string key = "keytde" + newstr.str();
+        std::string rmTde = "hadoop fs -rmr /TDE" + newstr.str();
+        std::string tdeKey = "hadoop key create keytde" + newstr.str();
+        std::string mkTde = "hadoop fs -mkdir /TDE" + newstr.str();
+        std::string tdeZone = "hdfs crypto -createZone -keyName " + key + "-path " + tde;
+        system(rmTde.c_str());
+        system(tdeKey.c_str());
+        system(mkTde.c_str());
+        system(tdeZone.c_str());
+    }
+
+    EncryptionZoneIterator it;
+    EXPECT_NO_THROW(it = fs->listEncryptionZone());
     int count = 0;
 
     while (it.hasNext()) {

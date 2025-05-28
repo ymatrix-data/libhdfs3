@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -38,7 +32,8 @@ namespace Internal {
 
 class FileSystemKey {
 public:
-    FileSystemKey(const std::string & uri, const char * user);
+    FileSystemKey(const std::string & uri, const char * user,
+                  const char * effective_user=NULL);
 
     FileSystemKey(const std::string & auth, const std::string & host,
                   const std::string & port, const std::string & scheme,

@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -65,6 +59,30 @@ void NamenodeImpl::invoke(const RpcCall & call) {
     channel.close(false);
 }
 
+EncryptionKey NamenodeImpl::getEncryptionKeys()
+{
+    try {
+        GetDataEncryptionKeyRequestProto request;
+        GetDataEncryptionKeyResponseProto response;
+
+        invoke(RpcCall(true, "getDataEncryptionKey", &request, &response));
+        EncryptionKey key;
+        key.setKeyId(response.dataencryptionkey().keyid());
+        key.setExpiryDate(response.dataencryptionkey().expirydate());
+        key.setBlockPoolId(response.dataencryptionkey().blockpoolid());
+        key.setNonce(response.dataencryptionkey().nonce());
+        key.setEncryptionKey(response.dataencryptionkey().encryptionkey());
+        key.setEncryptionAlgorithm(response.dataencryptionkey().encryptionalgorithm());
+        return key;
+
+    } catch (const HdfsRpcServerException & e) {
+        UnWrapper < FileNotFoundException,
+                  UnresolvedLinkException, HdfsIOException > unwrapper(e);
+        unwrapper.unwrap(__FILE__, __LINE__);
+    }
+
+}
+
 //Idempotent
 void NamenodeImpl::getBlockLocations(const std::string & src, int64_t offset,
                                      int64_t length, LocatedBlocks & lbs) /* throw (AccessControlException,
@@ -91,6 +109,7 @@ void NamenodeImpl::create(const std::string & src, const Permission & masked,
          FileAlreadyExistsException, FileNotFoundException,
          NSQuotaExceededException, ParentNotDirectoryException,
           UnresolvedLinkException, HdfsIOException) */{
+
     try {
         CreateRequestProto request;
         CreateResponseProto response;
@@ -100,6 +119,7 @@ void NamenodeImpl::create(const std::string & src, const Permission & masked,
         request.set_createparent(createParent);
         request.set_replication(replication);
         request.set_src(src);
+        request.add_cryptoprotocolversion(CryptoProtocolVersionProto::ENCRYPTION_ZONES);
         Build(masked, request.mutable_masked());
         invoke(RpcCall(false, "create", &request, &response));
     } catch (const HdfsRpcServerException & e) {
@@ -341,9 +361,9 @@ bool NamenodeImpl::rename(const std::string & src, const std::string & dst)
     }
 }
 
-/*void NamenodeImpl::concat(const std::string & trg,
-                          const std::vector<std::string> & srcs)  throw (UnresolvedLinkException,
-         HdfsIOException) {
+void NamenodeImpl::concat(const std::string & trg,
+                          const std::vector<std::string> & srcs)
+/* throw (UnresolvedLinkException, HdfsIOException) */{
     try {
         ConcatRequestProto request;
         ConcatResponseProto response;
@@ -354,7 +374,7 @@ bool NamenodeImpl::rename(const std::string & src, const std::string & dst)
         UnWrapper<UnresolvedLinkException, HdfsIOException> unwrapper(e);
         unwrapper.unwrap(__FILE__, __LINE__);
     }
-}*/
+}
 
 bool NamenodeImpl::truncate(const std::string & src, int64_t size,
                             const std::string & clientName)
@@ -552,7 +572,7 @@ std::vector<int64_t> NamenodeImpl::getFsStats() { /* throw (HdfsIOException) */
 }*/
 
 //Idempotent
-FileStatus NamenodeImpl::getFileInfo(const std::string & src)
+FileStatus NamenodeImpl::getFileInfo(const std::string & src, bool *exist)
 /* throw (FileNotFoundException,
  UnresolvedLinkException, HdfsIOException) */{
     FileStatus retval;
@@ -566,15 +586,26 @@ FileStatus NamenodeImpl::getFileInfo(const std::string & src)
         if (response.has_fs()) {
             Convert(src, retval, response.fs());
             retval.setPath(src.c_str());
+
+            if (exist) {
+                *exist = true;
+            }
+
             return retval;
         }
 
-        THROW(FileNotFoundException, "Path %s does not exist.", src.c_str());
+        if (!exist) {
+            THROW(FileNotFoundException, "Path %s does not exist.", src.c_str());
+        }
+
+        *exist = false;
     } catch (const HdfsRpcServerException & e) {
         UnWrapper < FileNotFoundException,
                   UnresolvedLinkException, HdfsIOException > unwrapper(e);
         unwrapper.unwrap(__FILE__, __LINE__);
     }
+
+    return retval;
 }
 
 //Idempotent
@@ -783,6 +814,77 @@ void NamenodeImpl::cancelDelegationToken(const Token & token) {
         invoke(RpcCall(true, "cancelDelegationToken", &request, &response));
     } catch (const HdfsRpcServerException & e) {
         UnWrapper<HdfsInvalidBlockToken, HdfsIOException> unwrapper(e);
+        unwrapper.unwrap(__FILE__, __LINE__);
+    }
+}
+
+bool NamenodeImpl::createEncryptionZone(const std::string & src, const std::string & keyName) {
+    try {
+        CreateEncryptionZoneRequestProto request;
+        CreateEncryptionZoneResponseProto response;
+        request.set_src(src);
+        request.set_keyname(keyName);
+        invoke(RpcCall(true, "createEncryptionZone",&request, &response));
+        return true;
+    } catch (const HdfsRpcServerException & e) {
+        UnWrapper < HdfsIOException > unwrapper(e);
+        unwrapper.unwrap(__FILE__, __LINE__);
+    }
+}
+
+EncryptionZoneInfo NamenodeImpl::getEncryptionZoneInfo(const std::string & src, bool *exist)
+/* throw (FileNotFoundException,
+ UnresolvedLinkException, HdfsIOException) */{
+    EncryptionZoneInfo retval;
+
+    try {
+        GetEZForPathRequestProto request;
+        GetEZForPathResponseProto response;
+        request.set_src(src);
+        invoke(RpcCall(true, "getEZForPath", &request, &response));
+
+        if (response.has_zone()) {
+            Convert(retval, response.zone());
+            retval.setPath(src.c_str());
+
+            if (exist) {
+                *exist = true;
+            }
+
+            return retval;
+        }
+
+        if (!exist) {
+            THROW(FileNotFoundException, "Path %s does not exist.", src.c_str());
+        }
+
+        *exist = false;
+    } catch (const HdfsRpcServerException & e) {
+        UnWrapper < FileNotFoundException,
+                  UnresolvedLinkException, HdfsIOException > unwrapper(e);
+        unwrapper.unwrap(__FILE__, __LINE__);
+    }
+
+    return retval;
+}
+
+//Idempotent
+bool NamenodeImpl::listEncryptionZones(const int64_t id, std::vector<EncryptionZoneInfo> & ezl) 
+                                      /* throw (AccessControlException,FileNotFoundException, UnresolvedLinkException, HdfsIOException) */{
+    try {
+        ListEncryptionZonesRequestProto request;
+        ListEncryptionZonesResponseProto response;
+        request.set_id(id);
+        invoke(RpcCall(true, "listEncryptionZones", &request, &response));
+
+        if (response.zones_size() != 0) {
+            Convert(ezl, response);
+            return response.hasmore();
+        }
+
+    } catch (const HdfsRpcServerException & e) {
+        UnWrapper < FileNotFoundException,
+                  UnresolvedLinkException, HdfsIOException > unwrapper(e);
         unwrapper.unwrap(__FILE__, __LINE__);
     }
 }

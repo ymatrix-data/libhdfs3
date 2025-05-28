@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -73,7 +67,7 @@ UserInfo UserInfo::LocalUser() {
 }
 
 size_t UserInfo::hash_value() const {
-    size_t values[] = { StringHasher(realUser), effectiveUser.hash_value() };
+    size_t values[] = { StringHasher(realUser), krbUser.hash_value(), StringHasher(effectiveUser) };
     return CombineHasher(values, sizeof(values) / sizeof(values[0]));
 }
 

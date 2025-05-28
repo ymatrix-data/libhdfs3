@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -89,6 +83,8 @@ public:
      * Add reference count to this channel.
      */
     virtual void addRef() = 0;
+
+    virtual void Ping() = 0;
 };
 
 /**
@@ -140,6 +136,8 @@ public:
     void addRef() {
         ++refs;
     }
+
+    virtual void Ping();
 
 private:
     /**
@@ -256,6 +254,7 @@ private:
                    BufferedSocketReader * in, RpcClient & client);
 
 private:
+    bool saslComplete;
     atomic<int> refs;
     bool available;
     mutex readMut;

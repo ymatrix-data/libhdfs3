@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -28,11 +22,13 @@
 #include "Atomic.h"
 #include "BlockLocation.h"
 #include "DirectoryIterator.h"
+#include "EncryptionZoneIterator.h"
 #include "Exception.h"
 #include "ExceptionInternal.h"
 #include "FileStatus.h"
 #include "FileSystemImpl.h"
 #include "FileSystemStats.h"
+#include "EncryptionZoneInfo.h"
 #include "InputStream.h"
 #include "LeaseRenewer.h"
 #include "Logger.h"
@@ -185,6 +181,14 @@ void FileSystemImpl::connect() {
      * To test if the connection is ok
      */
     getFsStats();
+    if (sconf.getEncryptedDatanode())
+        nn->getEncryptionKeys();
+}
+
+EncryptionKey FileSystemImpl::getEncryptionKeys() {
+    if (sconf.getEncryptedDatanode())
+        return nn->getEncryptionKeys();
+    return EncryptionKey();
 }
 
 /**
@@ -295,7 +299,7 @@ FileStatus FileSystemImpl::getFileStatus(const char * path) {
         THROW(InvalidParameter, "Invalid input: path should not be empty");
     }
 
-    return nn->getFileInfo(getStandardPath(path));
+    return nn->getFileInfo(getStandardPath(path), NULL);
 }
 
 static void Convert(BlockLocation & bl, const LocatedBlock & lb) {
@@ -498,6 +502,37 @@ bool FileSystemImpl::rename(const char * src, const char * dst) {
 }
 
 /**
+ * To move the blocks from a list of source files into a new target file
+ * @param trg the path to the new file
+ * @param srcs the list of source file paths
+ * @return return true if success.
+ */
+
+void FileSystemImpl::concat(const char * trg, const char ** srcs) {
+    std::vector<std::string> srcVector;
+
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    if (NULL == trg || !strlen(trg)) {
+        THROW(InvalidParameter, "Invalid input: trg should not be empty");
+    }
+
+    if (NULL == srcs) {
+        THROW(InvalidParameter, "Invalid input: srcs should not be NULL");
+    }
+
+    for (const char **p = srcs; *p != NULL; ++p) {
+        if (strlen(*p) == 0) {
+            THROW(InvalidParameter, "Invalid input: srcs should have an empty path");
+        }
+        srcVector.push_back(getStandardPath(*p));
+    }
+    nn->concat(getStandardPath(trg), srcVector);
+}
+
+/**
  * To set working directory.
  * @param path new working directory.
  */
@@ -539,7 +574,9 @@ bool FileSystemImpl::exist(const char * path) {
     }
 
     try {
-        getFileStatus(path);
+        bool retval = true;
+        nn->getFileInfo(getStandardPath(path), &retval);
+        return retval;
     } catch (const FileNotFoundException & e) {
         return false;
     }
@@ -752,9 +789,10 @@ bool FileSystemImpl::renewLease() {
         nn->renewLease(clientName);
         return true;
     } catch (const HdfsException & e) {
+        std::string buffer;
         LOG(LOG_ERROR,
             "Failed to renew lease for filesystem which client name is %s, since:\n%s",
-            getClientName(), GetExceptionDetail(e));
+            getClientName(), GetExceptionDetail(e, buffer));
     } catch (const std::exception & e) {
         LOG(LOG_ERROR,
             "Failed to renew lease for filesystem which client name is %s, since:\n%s",
@@ -776,6 +814,92 @@ bool FileSystemImpl::unregisterOpenedOutputStream() {
     }
 
     return  openedOutputStream == 0;
+}
+
+/**
+ * Create encryption zone for the directory with specific key name
+ * @param path the directory path which is to be created.
+ * @param keyname The key name of the encryption zone 
+ * @return return true if success.
+ */
+
+bool FileSystemImpl::createEncryptionZone(const char * path, const char * keyName) {
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    if (NULL == path || !strlen(path)) {
+        THROW(InvalidParameter, "Invalid input: path should not be empty");
+    }
+
+    if (NULL == keyName || !strlen(keyName)) {
+        THROW(InvalidParameter, "Invalid input: key name should not be empty");
+    }
+
+    return nn->createEncryptionZone(getStandardPath(path), keyName);
+}
+
+
+/**
+ * To get encryption zone information.
+ * @param path the path which information is to be returned.
+ * @return the encryption zone information.
+ */
+
+EncryptionZoneInfo FileSystemImpl::getEZForPath(const char * path) {
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    if (NULL == path || !strlen(path)) {
+        THROW(InvalidParameter, "Invalid input: path should not be empty");
+    }
+
+    return nn->getEncryptionZoneInfo(getStandardPath(path), NULL);
+}
+
+bool FileSystemImpl::listEncryptionZones(const int64_t id,
+                                std::vector<EncryptionZoneInfo> & ezl) {
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    return nn->listEncryptionZones(id, ezl);
+}
+
+/**
+ * list the contents of an encryption zone.
+ * @return return the encryption zone information.
+ */
+EncryptionZoneIterator FileSystemImpl::listEncryptionZone() {
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    return EncryptionZoneIterator(this, 0);
+}
+/**
+ * list all the contents of encryption zones.
+ * @param id the index of the encyrption zones.
+ * @return Return a vector of encryption zones information.
+ */
+
+std::vector<EncryptionZoneInfo> FileSystemImpl::listAllEncryptionZoneItems() {
+    if (!nn) {
+        THROW(HdfsIOException, "FileSystemImpl: not connected.");
+    }
+
+    std::vector<EncryptionZoneInfo> retval;
+    retval.clear();
+    int64_t id = 0;
+
+    EncryptionZoneIterator it;
+    it = FileSystemImpl::listEncryptionZone();
+
+    while (it.hasNext()) {
+        retval.push_back(it.getNext());
+    }
+    return retval;
 }
 
 }

@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -154,7 +148,7 @@ hdfsFS hdfsConnectNewInstance(const char * nn, tPort port);
  * @param bld    The HDFS builder
  * @return       Returns a handle to the filesystem, or NULL on error.
  */
-hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld);
+hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld, const char * effective_user=NULL);
 
 /**
  * Create an HDFS builder.
@@ -311,9 +305,6 @@ int hdfsDisconnect(hdfsFS fs);
 hdfsFile hdfsOpenFile(hdfsFS fs, const char * path, int flags, int bufferSize,
                       short replication, tOffset blocksize);
 
-hdfsFile hdfsOpenFile2(hdfsFS fs, const char *datanode, const char * path, int flags, int bufferSize,
-                      short replication, tOffset blocksize);
-
 /**
  * hdfsCloseFile - Close an open file.
  * @param fs The configured filesystem handle.
@@ -454,6 +445,20 @@ int hdfsDelete(hdfsFS fs, const char * path, int recursive);
 int hdfsRename(hdfsFS fs, const char * oldPath, const char * newPath);
 
 /**
+ * hdfsConcat - Concatenate (move) the blocks in a list of source
+ * files into a single file deleting the source files.  Source
+ * files must all have the same block size and replicationand all
+ * but the last source file must be an integer number of full
+ * blocks long.  The source files are deleted on successful
+ * completion.
+ * @param fs The configured filesystem handle.
+ * @param trg The path of target (resulting) file
+ * @param scrs A list of paths to source files
+ * @return Returns 0 on success, -1 on error.
+ */
+int hdfsConcat(hdfsFS fs, const char * trg, const char ** srcs);
+
+/**
  * hdfsGetWorkingDirectory - Get the current working directory for
  * the given filesystem.
  * @param fs The configured filesystem handle.
@@ -482,6 +487,16 @@ int hdfsSetWorkingDirectory(hdfsFS fs, const char * path);
 int hdfsCreateDirectory(hdfsFS fs, const char * path);
 
 /**
+ * hdfsCreateDirectoryEx - Make the given file with extended options
+ * @param fs The configured filesystem handle.
+ * @param path The path of the directory.
+ * @param mode The permissions for created file and directories.
+ * @param createParents Controls whether to create all non-existent parent directories or not
+ * @return Returns 0 on success, -1 on error.
+ */
+int hdfsCreateDirectoryEx(hdfsFS fs, const char * path, short mode, int createParents);
+
+/**
  * hdfsSetReplication - Set the replication of the specified
  * file to the supplied value
  * @param fs The configured filesystem handle.
@@ -489,6 +504,30 @@ int hdfsCreateDirectory(hdfsFS fs, const char * path);
  * @return Returns 0 on success, -1 on error.
  */
 int hdfsSetReplication(hdfsFS fs, const char * path, int16_t replication);
+
+/**
+ * hdfsEncryptionZoneInfo- Information about an encryption zone.
+ */
+typedef struct {
+    int mSuite; /* the suite of encryption zone */
+    int mCryptoProtocolVersion; /* the version of crypto protocol */
+    int64_t mId; /* the id of encryption zone */
+    char * mPath; /* the path of encryption zone */
+    char * mKeyName; /* the key name of encryption zone */
+} hdfsEncryptionZoneInfo;
+
+
+/**
+ * hdfsEncryptionFileInfo - Information about an encryption file/directory.
+ */
+typedef struct {
+    int mSuite; /* the suite of encryption file/directory */
+    int mCryptoProtocolVersion; /* the version of crypto protocol */
+    char * mKey; /* the key of encryption file/directory */
+    char * mKeyName; /* the key name of encryption file/directory */
+    char * mIv; /* the iv of encryption file/directory */
+    char * mEzKeyVersionName; /* the version encryption file/directory */
+} hdfsEncryptionFileInfo;
 
 /**
  * hdfsFileInfo - Information about a file/directory.
@@ -504,6 +543,7 @@ typedef struct {
     char * mGroup; /* the group associated with the file */
     short mPermissions; /* the permissions associated with the file */
     tTime mLastAccess; /* the last access time for the file in seconds */
+    hdfsEncryptionFileInfo * mHdfsEncryptionFileInfo; /* the encryption info of the file/directory */
 } hdfsFileInfo;
 
 /**
@@ -537,6 +577,15 @@ hdfsFileInfo * hdfsGetPathInfo(hdfsFS fs, const char * path);
 void hdfsFreeFileInfo(hdfsFileInfo * infos, int numEntries);
 
 /**
+ * hdfsFreeEncryptionZoneInfo - Free up the hdfsEncryptionZoneInfo array (including fields)
+ * @param infos The array of dynamically-allocated hdfsEncryptionZoneInfo
+ * objects.
+ * @param numEntries The size of the array.
+ */
+void hdfsFreeEncryptionZoneInfo(hdfsEncryptionZoneInfo * infos, int numEntries);
+
+
+/**
  * hdfsGetHosts - Get hostnames where a particular block (determined by
  * pos & blocksize) of a file is stored. The last element in the array
  * is NULL. Due to replication, a single block could be present on
@@ -548,8 +597,8 @@ void hdfsFreeFileInfo(hdfsFileInfo * infos, int numEntries);
  * @return Returns a dynamically-allocated 2-d array of blocks-hosts;
  * NULL on error.
  */
-char ** * hdfsGetHosts(hdfsFS fs, const char * path, tOffset start,
-                       tOffset length);
+char ***hdfsGetHosts(hdfsFS fs, const char *path, tOffset start,
+                     tOffset length);
 
 /**
  * hdfsFreeHosts - Free up the structure returned by hdfsGetHosts
@@ -557,7 +606,7 @@ char ** * hdfsGetHosts(hdfsFS fs, const char * path, tOffset start,
  * objects.
  * @param numEntries The size of the array.
  */
-void hdfsFreeHosts(char ** *blockHosts);
+void hdfsFreeHosts(char ***blockHosts);
 
 /**
  * hdfsGetDefaultBlockSize - Get the default blocksize.
@@ -663,7 +712,7 @@ int64_t hdfsRenewDelegationToken(hdfsFS fs, const char * token);
 int hdfsCancelDelegationToken(hdfsFS fs, const char * token);
 
 typedef struct Namenode {
-    char * rpc_addr;    // namenode rpc address and port, such as "host:9000"
+    char * rpc_addr;    // namenode rpc address and port, such as "host:8020"
     char * http_addr;   // namenode http address and port, such as "host:50070"
 } Namenode;
 
@@ -731,6 +780,35 @@ BlockLocation * hdfsGetFileBlockLocations(hdfsFS fs, const char * path,
  * @param numOfBlock The number of elements in the locaitons
  */
 void hdfsFreeFileBlockLocations(BlockLocation * locations, int numOfBlock);
+
+/**
+ * Create encryption zone for the directory with specific key name
+ * @param fs The configured filesystem handle.
+ * @param path The path of the directory.
+ * @param keyname The key name of the encryption zone 
+ * @return Returns 0 on success, -1 on error.
+ */
+int hdfsCreateEncryptionZone(hdfsFS fs, const char * path, const char * keyName);
+
+/**
+ * hdfsEncryptionZoneInfo - Get information about a path as a (dynamically
+ * allocated) single hdfsEncryptionZoneInfo struct. hdfsEncryptionZoneInfo should be
+ * called when the pointer is no longer needed.
+ * @param fs The configured filesystem handle.
+ * @param path The path of the encryption zone.
+ * @return Returns a dynamically-allocated hdfsEncryptionZoneInfo object;
+ * NULL on error.
+ */
+hdfsEncryptionZoneInfo * hdfsGetEZForPath(hdfsFS fs, const char * path);
+
+/**
+ * hdfsEncryptionZoneInfo -  Get list of all the encryption zones.
+ * hdfsFreeEncryptionZoneInfo should be called to deallocate memory.
+ * @param fs The configured filesystem handle.
+ * @return Returns a dynamically-allocated array of hdfsEncryptionZoneInfo objects;
+ * NULL on error.
+ */
+hdfsEncryptionZoneInfo * hdfsListEncryptionZones(hdfsFS fs, int * numEntries);
 
 #ifdef __cplusplus
 }

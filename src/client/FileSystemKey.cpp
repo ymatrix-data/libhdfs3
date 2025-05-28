@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -36,7 +30,7 @@
 namespace Hdfs {
 namespace Internal {
 
-FileSystemKey::FileSystemKey(const std::string & uri, const char * u) {
+FileSystemKey::FileSystemKey(const std::string & uri, const char * u, const char * effective_user) {
     xmlURIPtr uriobj;
     std::stringstream ss;
     ss.imbue(std::locale::classic());
@@ -63,6 +57,10 @@ FileSystemKey::FileSystemKey(const std::string & uri, const char * u) {
 
         if (u && strlen(u) > 0) {
             user = UserInfo(u);
+            if (effective_user != NULL) {
+                user.setRealUser(user.getEffectiveUser());
+                user.setEffectiveUser(effective_user);
+            }
         } else if (NULL == uriobj->user || 0 == strlen(uriobj->user)) {
             user = UserInfo::LocalUser();
         } else {

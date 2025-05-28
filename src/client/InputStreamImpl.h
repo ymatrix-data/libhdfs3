@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -43,8 +37,6 @@
 #include "server/LocatedBlocks.h"
 #include "SessionConfig.h"
 #include "Unordered.h"
-
-#include <string>
 
 #ifdef MOCK
 #include "TestDatanodeStub.h"
@@ -110,8 +102,6 @@ public:
      */
     std::string toString();
 
-    void setHostname(std::string hostname);
-
 private:
     bool choseBestNode();
     bool isLocalNode();
@@ -151,7 +141,6 @@ private:
     std::string path;
     std::vector<DatanodeInfo> failedNodes;
     std::vector<char> localReaderBuffer;
-    std::string hostname;
 
 #ifdef MOCK
 private:

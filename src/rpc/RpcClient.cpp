@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -103,8 +97,9 @@ void RpcClientImpl::clean() {
             }
         }
     } catch (const Hdfs::HdfsException & e) {
+        std::string buffer;
         LOG(LOG_ERROR, "RpcClientImpl's idle cleaner exit: %s",
-            GetExceptionDetail(e));
+            GetExceptionDetail(e, buffer));
     } catch (const std::exception & e) {
         LOG(LOG_ERROR, "RpcClientImpl's idle cleaner exit: %s", e.what());
     }
@@ -154,8 +149,6 @@ RpcChannel & RpcClientImpl::getChannel(const RpcAuth & auth,
             allChannels[key] = rc;
         }
 
-        rc->addRef();
-
         if (!cleaning) {
             cleaning = true;
 
@@ -165,6 +158,8 @@ RpcChannel & RpcClientImpl::getChannel(const RpcAuth & auth,
 
             CREATE_THREAD(cleaner, bind(&RpcClientImpl::clean, this));
         }
+        // increase ref count after successfully done without any exception
+        rc->addRef();
     } catch (const HdfsRpcException & e) {
         throw;
     } catch (...) {

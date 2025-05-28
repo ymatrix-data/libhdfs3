@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -104,6 +98,22 @@ public:
         return defaultBlockSize;
     }
 
+    bool getEncryptedDatanode() const {
+        return encryptedDatanode;
+    }
+
+    bool getSecureDatanode() const {
+        return secureDatanode;
+    }
+
+    void setSecureDatanode(bool val) {
+        secureDatanode = val;
+    }
+
+    int32_t getCryptoBufferSize() const {
+        return cryptoBufferSize;
+    }
+
     /*
      * InputStream configure
      */
@@ -137,6 +147,10 @@ public:
 
     int32_t getMaxLocalBlockInfoCacheSize() const {
         return maxLocalBlockInfoCacheSize;
+    }
+
+    bool getEnableVerify() const {
+        return enableVerify;
     }
 
     /*
@@ -174,6 +188,10 @@ public:
 
     bool canAddDatanode() const {
         return addDatanode;
+    }
+
+    bool canAddDatanodeBest() const {
+        return addDatanodeBest;
     }
 
     int32_t getHeartBeatInterval() const {
@@ -214,7 +232,7 @@ public:
 
     LogSeverity getLogSeverity() const {
         for (size_t i = FATAL; i < sizeof(SeverityName) / sizeof(SeverityName[1]);
-                ++i) {
+    i++) {
             if (logSeverity == SeverityName[i]) {
                 return static_cast<LogSeverity>(i);
             }
@@ -307,7 +325,37 @@ public:
       return socketCacheCapacity;
     }
 
+    int32_t getRpcProtection() const {
+        return rpcProtection;
+    }
+
+    int32_t getDataProtection() const {
+        return dataProtection;
+    }
+
+    const std::string& getKmsUrl() const {
+        return kmsUrl;
+    }
+
+    const std::string& getKmsMethod() const {
+        return kmsAuthMethod;
+    }
+
+    int32_t getHttpRequestRetryTimes() const {
+        return httpRequestRetryTimes;
+    }
+
+    int64_t getCurlTimeOut() const {
+        return curlTimeout;
+    }
+
 public:
+
+    int32_t rpcProtection;
+    int32_t dataProtection;
+    std::string rpcProtectionStr;
+    std::string dataProtectionStr;
+
     /*
      * rpc configure
      */
@@ -331,7 +379,10 @@ public:
     std::string logSeverity;
     int32_t defaultReplica;
     int64_t defaultBlockSize;
-
+    bool encryptedDatanode;
+    bool secureDatanode;
+    int32_t cryptoBufferSize;
+   
     /*
      * InputStream configure
      */
@@ -339,6 +390,7 @@ public:
     bool readFromLocal;
     bool notRetryAnotherNode;
     bool legacyLocalBlockReader;
+    bool enableVerify;
     int32_t inputConnTimeout;
     int32_t inputReadTimeout;
     int32_t inputWriteTimeout;
@@ -356,6 +408,7 @@ public:
      * OutputStream configure
      */
     bool addDatanode;
+    bool addDatanodeBest;
     int32_t chunkSize;
     int32_t packetSize;
     int32_t blockWriteRetry; //retry on block not replicated yet.
@@ -365,6 +418,10 @@ public:
     int32_t packetPoolSize;
     int32_t heartBeatInterval;
     int32_t closeFileTimeout;
+    std::string kmsUrl;
+    std::string kmsAuthMethod;
+    int32_t httpRequestRetryTimes;
+    int64_t curlTimeout;
 
 };
 

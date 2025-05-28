@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -43,6 +37,8 @@ public:
     ~NamenodeProxy();
 
 public:
+
+    EncryptionKey getEncryptionKeys();
 
     void getBlockLocations(const std::string & src, int64_t offset,
                            int64_t length, LocatedBlocks & lbs);
@@ -113,7 +109,7 @@ public:
 
     void metaSave(const std::string & filename);
 
-    FileStatus getFileInfo(const std::string & src);
+    FileStatus getFileInfo(const std::string & src, bool *exist);
 
     FileStatus getFileLinkInfo(const std::string & src);
 
@@ -144,6 +140,13 @@ public:
     void cancelDelegationToken(const Token & token);
 
     void close();
+
+    bool createEncryptionZone(const std::string & path, const std::string & keyName);
+
+    EncryptionZoneInfo getEncryptionZoneInfo(const std::string & src, bool *exist);
+
+    bool listEncryptionZones(const int64_t id, std::vector<EncryptionZoneInfo> & ezl); 
+
 
 private:
     shared_ptr<Namenode> getActiveNamenode(uint32_t & oldValue);

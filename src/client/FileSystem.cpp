@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -26,6 +20,7 @@
  * limitations under the License.
  */
 #include "DirectoryIterator.h"
+#include "EncryptionZoneIterator.h"
 #include "Exception.h"
 #include "ExceptionInternal.h"
 #include "FileSystem.h"
@@ -109,7 +104,7 @@ static std::string ExtractPrincipalFromTicketCache(
 
     if (!errmsg.empty()) {
         THROW(HdfsIOException,
-              "FileSystem: Filed to extract principal from ticket cache: %s",
+              "FileSystem: Failed to extract principal from ticket cache: %s",
               errmsg.c_str());
     }
 
@@ -145,6 +140,14 @@ FileSystem::FileSystem(const Config & conf) :
     conf(conf), impl(NULL) {
 }
 
+FileSystem::FileSystem(const Config & conf, const char * euser) :
+    conf(conf), impl(NULL) {
+        if (euser == NULL)
+            effective_user = "";
+        else
+            effective_user = euser;
+}
+
 FileSystem::FileSystem(const FileSystem & other) :
     conf(other.conf), impl(NULL) {
     if (other.impl) {
@@ -158,6 +161,7 @@ FileSystem & FileSystem::operator =(const FileSystem & other) {
     }
 
     conf = other.conf;
+    effective_user = other.effective_user;
 
     if (impl) {
         delete impl;
@@ -180,6 +184,12 @@ FileSystem::~FileSystem() {
     }
 }
 
+EncryptionKey FileSystem::getEncryptionKeys() {
+    if (impl)
+        return impl->filesystem->getEncryptionKeys();
+    return EncryptionKey();
+}
+
 void FileSystem::connect() {
     Internal::SessionConfig sconf(conf);
     connect(sconf.getDefaultUri().c_str(), NULL, NULL);
@@ -194,12 +204,13 @@ void FileSystem::connect(const char * uri) {
 }
 
 static FileSystemWrapper * ConnectInternal(const char * uri,
-        const std::string & principal, const Token * token, Config & conf) {
+      const std::string & principal, const Token * token, Config & conf,
+      const char * effective_user=NULL) {
     if (NULL == uri || 0 == strlen(uri)) {
         THROW(InvalidParameter, "Invalid HDFS uri.");
     }
 
-    FileSystemKey key(uri, principal.c_str());
+    FileSystemKey key(uri, principal.c_str(), effective_user);
 
     if (token) {
         key.addToken(*token);
@@ -231,7 +242,10 @@ void FileSystem::connect(const char * uri, const char * username, const char * t
             Token t;
             t.fromString(token);
             principal = ExtractPrincipalFromToken(t);
-            impl = ConnectInternal(uri, principal, &t, conf);
+            const char * euser = NULL;
+            if (!effective_user.empty())
+                euser = effective_user.c_str();
+            impl = ConnectInternal(uri, principal, &t, conf, euser);         
             impl->filesystem->connect();
             return;
         } else if (username) {
@@ -242,7 +256,10 @@ void FileSystem::connect(const char * uri, const char * username, const char * t
             principal = ExtractPrincipalFromTicketCache(sconf.getKerberosCachePath());
         }
 
-        impl = ConnectInternal(uri, principal, NULL, conf);
+        const char * euser = NULL;
+        if (!effective_user.empty())
+            euser = effective_user.c_str();
+        impl = ConnectInternal(uri, principal, NULL, conf, euser);
         impl->filesystem->connect();
     } catch (...) {
         delete impl;
@@ -473,6 +490,20 @@ bool FileSystem::rename(const char * src, const char * dst) {
 }
 
 /**
+ * To move blocks from a list of files to a new file.
+ * @param trg new file path
+ * @param srcs list of source files
+ * @return return true if success.
+ */
+void FileSystem::concat(const char * trg, const char **srcs) {
+    if (!impl) {
+        THROW(HdfsIOException, "FileSystem: not connected.");
+    }
+
+    impl->filesystem->concat(trg, srcs);
+}
+
+/**
  * To set working directory.
  * @param path new working directory.
  */
@@ -586,6 +617,63 @@ void FileSystem::cancelDelegationToken(const std::string & token) {
     }
 
     impl->filesystem->cancelDelegationToken(token);
+}
+
+
+/**
+ * Create encryption zone for the directory with specific key name
+ * @param path the directory path which is to be created.
+ * @param keyname The key name of the encryption zone 
+ * @return return true if success.
+ */
+bool FileSystem::createEncryptionZone(const char * path, const char * keyName) {
+    if (!impl) {
+        THROW(HdfsIOException, "FileSystem: not connected.");
+    }
+
+    return impl->filesystem->createEncryptionZone(path, keyName);
+}
+
+/**
+* To get encryption zone information.
+* @param path the path which information is to be returned.
+* @return the encryption zone information.
+*/
+EncryptionZoneInfo FileSystem::getEZForPath(const char * path) {
+    if (!impl) {
+        THROW(HdfsIOException, "FileSystem: not connected.");
+    }
+   
+    return impl->filesystem->getEZForPath(path);
+}
+
+/**
+ * list the contents of an encryption zone.
+ * @return Return a iterator to visit all elements in this encryption zone.
+ */
+EncryptionZoneIterator FileSystem::listEncryptionZone()  {
+    if (!impl) {
+        THROW(HdfsIOException, "FileSystem: not connected.");
+    }
+
+    return impl->filesystem->listEncryptionZone();
+}
+
+/**
+* list all the contents of encryption zones.
+* @param id the index of encryption zones.
+* @return Return a vector of encryption zones information..
+*/
+std::vector<EncryptionZoneInfo> FileSystem::listAllEncryptionZoneItems() {
+    if (!impl) {
+        THROW(HdfsIOException, "FileSystem: not connected.");
+    }
+
+    return impl->filesystem->listAllEncryptionZoneItems();
+}
+
+Internal::SessionConfig & FileSystem::getConf() {
+    return impl->filesystem->getConf();
 }
 
 }

@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -57,10 +51,6 @@ void InputStream::open(FileSystem & fs, const char * path,
 
     impl->open(fs.impl->filesystem, path, verifyChecksum);
 }
-
-    void InputStream::setHostname(const char *hostname) {
-        impl->setHostname(std::string(hostname));
-    }
 
 /**
  * To read data from hdfs.

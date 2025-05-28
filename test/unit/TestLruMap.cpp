@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -36,7 +30,7 @@ TEST(TestLruMap, TestInsertAndFind) {
     map.insert(2, 2);
     map.insert(3, 3);
     map.insert(4, 4);
-    int value;
+    int value = 0;
     EXPECT_TRUE(map.find(2, &value));
     EXPECT_TRUE(value == 2);
     EXPECT_TRUE(map.find(3, &value));
@@ -56,9 +50,9 @@ TEST(TestLruMap, TestFindAndErase) {
     map.insert(2, 2);
     map.insert(3, 3);
     map.insert(4, 4);
-    int value;
-    EXPECT_EQ(3, map.size());
+    int value = 0;
+    EXPECT_EQ(3u, map.size());
     EXPECT_TRUE(map.findAndErase(2, &value));
     EXPECT_TRUE(value == 2);
-    EXPECT_EQ(2, map.size());
+    EXPECT_EQ(2u, map.size());
 }

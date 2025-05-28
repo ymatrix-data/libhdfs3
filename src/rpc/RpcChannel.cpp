@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -34,6 +28,7 @@
 #include "RpcContentWrapper.h"
 #include "RpcHeader.pb.h"
 #include "RpcHeader.pb.h"
+#include "datatransfer.pb.h"
 #include "server/RpcHelper.h"
 #include "Thread.h"
 #include "WriteBuffer.h"
@@ -51,6 +46,70 @@ using namespace google::protobuf::io;
 namespace Hdfs {
 namespace Internal {
 
+
+class SaslOutputWrapper {
+public:
+    SaslOutputWrapper(SaslClient * client, RpcClient *rpcClient) {
+        saslClient = client;
+        this->rpcClient = rpcClient;
+    }
+
+    std::string wrap(std::string data) {
+        if (!saslClient->isPrivate() && !saslClient->isIntegrity())
+            return data;
+
+        std::string rawdata = saslClient->encode(data.c_str(), data.length());
+        msg.set_state(RpcSaslProto_SaslState_WRAP);
+        msg.set_token(rawdata);
+        int totalLen;
+        WriteBuffer buffer;
+        RpcRequestHeaderProto rpcHeader;
+        rpcHeader.set_callid(AuthProtocol::SASL);
+        rpcHeader.set_clientid(rpcClient->getClientId());
+        rpcHeader.set_retrycount(INVALID_RETRY_COUNT);
+        rpcHeader.set_rpckind(RPC_PROTOCOL_BUFFER);
+        rpcHeader.set_rpcop(RpcRequestHeaderProto_OperationProto_RPC_FINAL_PACKET);
+        RpcContentWrapper wrapper(&rpcHeader, &msg);
+        totalLen = wrapper.getLength();
+        buffer.writeBigEndian(totalLen);
+        wrapper.writeTo(buffer);
+
+        int length = buffer.getDataSize(0);
+        std::string outdata;
+        outdata.resize(length);
+        memcpy(&outdata[0], buffer.getBuffer(0), length);
+        return outdata;
+    }
+
+private:
+    RpcSaslProto msg;
+    SaslClient * saslClient;
+    RpcClient * rpcClient;
+};
+
+class SaslInputWrapper {
+public:
+    SaslInputWrapper(SaslClient * client, RpcClient *rpcClient) {
+        saslClient = client;
+        this->rpcClient = rpcClient;
+    }
+
+    std::string unwrap(std::string data) {
+        if (!saslClient->isPrivate() && !saslClient->isIntegrity())
+            return data;
+
+       std::string rawdata = saslClient->decode(data.c_str(), data.length());
+       return rawdata;
+
+
+    }
+private:
+    RpcSaslProto msg;
+    SaslClient * saslClient;
+    RpcClient * rpcClient;
+};
+
+
 RpcChannelImpl::RpcChannelImpl(const RpcChannelKey & k, RpcClient & c) :
     refs(0), available(false), key(k), client(c) {
     sock = shared_ptr<Socket>(new TcpSocketImpl);
@@ -59,6 +118,7 @@ RpcChannelImpl::RpcChannelImpl(const RpcChannelKey & k, RpcClient & c) :
              new BufferedSocketReaderImpl(
                  *static_cast<TcpSocketImpl *>(sock.get())));
     lastActivity = lastIdle = steady_clock::now();
+    saslComplete = false;
 }
 
 RpcChannelImpl::RpcChannelImpl(const RpcChannelKey & k, Socket * s,
@@ -67,6 +127,7 @@ RpcChannelImpl::RpcChannelImpl(const RpcChannelKey & k, Socket * s,
     sock = shared_ptr<Socket>(s);
     this->in = shared_ptr<BufferedSocketReader>(in);
     lastActivity = lastIdle = steady_clock::now();
+    saslComplete = false;
 }
 
 RpcChannelImpl::~RpcChannelImpl() {
@@ -127,7 +188,7 @@ const RpcSaslProto_SaslAuth * RpcChannelImpl::createSaslClient(
             break;
         } else if (method.getMethod() == AuthMethod::SIMPLE) {
             return auth;
-        } else if (method.getMethod() == AuthMethod::UNKNOWN) {
+        } else if (method.getMethod() == AuthMethod::UNSURENESS) {
             return auth;
         } else {
             auth = NULL;
@@ -147,8 +208,10 @@ const RpcSaslProto_SaslAuth * RpcChannelImpl::createSaslClient(
         THROW(AccessControlException, "%s", ss.str().c_str());
     }
 
+    const RpcConfig & conf = key.getConf();
     saslClient = shared_ptr<SaslClient>(
-                     new SaslClient(*auth, token, key.getAuth().getUser().getPrincipal()));
+                     new SaslClient(*auth, token, key.getAuth().getUser().getPrincipal(),
+                     false, conf.getProtection()));
     return auth;
 }
 
@@ -167,19 +230,23 @@ std::string RpcChannelImpl::saslEvaluateToken(RpcSaslProto & response, bool serv
         }
 
         if (!token.empty()) {
-            THROW(AccessControlException, "Client generated spurious response");
+            if (!saslClient || !saslClient->isPrivate())
+                THROW(AccessControlException, "Client generated spurious response");
         }
     }
 
     return token;
 }
 
+
 RpcAuth RpcChannelImpl::setupSaslConnection() {
     RpcAuth retval;
     RpcSaslProto negotiateRequest, response, msg;
+    saslComplete = false;
     negotiateRequest.set_state(RpcSaslProto_SaslState_NEGOTIATE);
     sendSaslMessage(&negotiateRequest, &response);
     bool done = false;
+    std::string payload;
 
     do {
         readOneResponse(false);
@@ -193,20 +260,20 @@ RpcAuth RpcChannelImpl::setupSaslConnection() {
 
             if (retval.getMethod() == AuthMethod::SIMPLE) {
                 done = true;
-            } else if (retval.getMethod() == AuthMethod::UNKNOWN) {
+            } else if (retval.getMethod() == AuthMethod::UNSURENESS) {
                 THROW(AccessControlException, "Unknown auth mechanism");
             } else {
                 std::string respToken;
                 RpcSaslProto_SaslAuth * respAuth = msg.add_auths();
                 respAuth->CopyFrom(*auth);
-                std::string chanllege;
+                std::string challenge;
 
                 if (auth->has_challenge()) {
-                    chanllege = auth->challenge();
+                    challenge = auth->challenge();
                     respAuth->clear_challenge();
                 }
 
-                respToken = saslClient->evaluateChallenge(chanllege);
+                respToken = saslClient->evaluateChallenge(challenge);
 
                 if (!respToken.empty()) {
                     msg.set_token(respToken);
@@ -226,6 +293,7 @@ RpcAuth RpcChannelImpl::setupSaslConnection() {
             std::string token = saslEvaluateToken(response, false);
             msg.set_token(token);
             msg.set_state(RpcSaslProto_SaslState_RESPONSE);
+
             break;
         }
 
@@ -233,10 +301,11 @@ RpcAuth RpcChannelImpl::setupSaslConnection() {
             if (!saslClient) {
                 retval = RpcAuth(AuthMethod::SIMPLE);
             } else {
-                saslEvaluateToken(response, true);
+                payload = saslEvaluateToken(response, true);
             }
 
             done = true;
+            saslComplete = true;
             break;
 
         default:
@@ -252,11 +321,13 @@ RpcAuth RpcChannelImpl::setupSaslConnection() {
     return retval;
 }
 
+
 void RpcChannelImpl::connect() {
     int sleep = 1;
     exception_ptr lastError;
     const RpcConfig & conf = key.getConf();
     const RpcServerInfo & server = key.getServer();
+    std::string buffer;
 
     for (int i = 0; i < conf.getMaxRetryOnConnect(); ++i) {
         RpcAuth auth = key.getAuth();
@@ -303,19 +374,19 @@ void RpcChannelImpl::connect() {
             lastError = current_exception();
             LOG(LOG_ERROR,
                 "Failed to setup RPC connection to \"%s:%s\" caused by:\n%s",
-                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e));
+                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e, buffer));
         } catch (const HdfsNetworkException & e) {
             sleep = 1;
             lastError = current_exception();
             LOG(LOG_ERROR,
                 "Failed to setup RPC connection to \"%s:%s\" caused by:\n%s",
-                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e));
+                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e, buffer));
         } catch (const HdfsTimeoutException & e) {
             sleep = 1;
             lastError = current_exception();
             LOG(LOG_ERROR,
                 "Failed to setup RPC connection to \"%s:%s\" caused by:\n%s",
-                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e));
+                server.getHost().c_str(), server.getPort().c_str(), GetExceptionDetail(e, buffer));
         }
 
         if (i + 1 < conf.getMaxRetryOnConnect()) {
@@ -438,11 +509,12 @@ void RpcChannelImpl::invoke(const RpcCall & call) {
 
                 if (!retry && call.isIdempotent()) {
                     retry = true;
+                    std::string buffer;
                     LOG(LOG_ERROR,
                         "Failed to invoke RPC call \"%s\" on server \"%s:%s\": \n%s",
                         call.getName(), key.getServer().getHost().c_str(),
                         key.getServer().getPort().c_str(),
-                        GetExceptionDetail(lastError));
+                        GetExceptionDetail(lastError, buffer));
                     LOG(INFO,
                         "Retry idempotent RPC call \"%s\" on server \"%s:%s\"",
                         call.getName(), key.getServer().getHost().c_str(),
@@ -524,7 +596,16 @@ void RpcChannelImpl::sendRequest(RpcRemoteCallPtr remote) {
     WriteBuffer buffer;
     assert(true == available);
     remote->serialize(key.getProtocol(), buffer);
-    sock->writeFully(buffer.getBuffer(0), buffer.getDataSize(0),
+    std::string data;
+    int length = buffer.getDataSize(0);
+    data.resize(length);
+    memcpy(&data[0], buffer.getBuffer(0), length);
+
+    if (saslClient) {
+        SaslOutputWrapper wrapper(saslClient.get(), &client);
+        data = wrapper.wrap(data);
+    }
+    sock->writeFully(data.c_str(), data.length(),
                      key.getConf().getWriteTimeout());
     uint32_t id = remote->getIdentity();
     pendingCalls[id] = remote;
@@ -571,6 +652,11 @@ void RpcChannelImpl::checkOneResponse() {
     }
 }
 
+void RpcChannelImpl::Ping() {
+    unique_lock<mutex> lock(writeMut);
+    sendPing();
+}
+
 void RpcChannelImpl::sendPing() {
     static const std::vector<char> pingRequest = RpcRemoteCall::GetPingRequest(client.getClientId());
 
@@ -578,8 +664,17 @@ void RpcChannelImpl::sendPing() {
         LOG(INFO,
             "RPC channel to \"%s:%s\" got no response or idle for %d milliseconds, sending ping.",
             key.getServer().getHost().c_str(), key.getServer().getPort().c_str(), key.getConf().getPingTimeout());
-        sock->writeFully(&pingRequest[0], pingRequest.size(), key.getConf().getWriteTimeout());
-        lastActivity = steady_clock::now();
+            int length = pingRequest.size();
+            std::string data;
+            data.resize(length);
+            memcpy(&data[0], &pingRequest[0], length);
+
+            if (saslClient) {
+                SaslOutputWrapper wrapper(saslClient.get(), &client);
+                data = wrapper.wrap(data);
+            }
+            sock->writeFully(data.c_str(), data.length(), key.getConf().getWriteTimeout());
+            lastActivity = steady_clock::now();
     }
 }
 
@@ -607,9 +702,13 @@ bool RpcChannelImpl::checkIdle() {
                 sendPing();
             }
         } catch (...) {
+            std::string buffer;
             LOG(LOG_ERROR,
-                "Failed to send ping via idle RPC channel to server \"%s:%s\": \n%s",
-                key.getServer().getHost().c_str(), key.getServer().getPort().c_str(), GetExceptionDetail(current_exception()));
+                "Failed to send ping via idle RPC channel to server \"%s:%s\": "
+                "\n%s",
+                key.getServer().getHost().c_str(),
+                key.getServer().getPort().c_str(),
+                GetExceptionDetail(current_exception(), buffer));
             sock->close();
             return true;
         }
@@ -646,15 +745,24 @@ void RpcChannelImpl::sendConnectionHeader(const RpcAuth &auth) {
     buffer.write(static_cast<char>(RPC_HEADER_VERSION));
     buffer.write(static_cast<char>(0));  //for future feature
     buffer.write(static_cast<char>(auth.getProtocol()));
-    sock->writeFully(buffer.getBuffer(0), buffer.getDataSize(0),
+    std::string data;
+    int length = buffer.getDataSize(0);
+    data.resize(length);
+    memcpy(&data[0], buffer.getBuffer(0), length);
+
+    sock->writeFully(data.c_str(), data.length(),
                      key.getConf().getWriteTimeout());
 }
 
 void RpcChannelImpl::buildConnectionContext(
     IpcConnectionContextProto & connectionContext, const RpcAuth & auth) {
     connectionContext.set_protocol(key.getProtocol().getProtocol());
-    std::string euser = key.getAuth().getUser().getPrincipal();
+    std::string principal = key.getAuth().getUser().getPrincipal();
+    std::string euser = key.getAuth().getUser().getEffectiveUser();
     std::string ruser = key.getAuth().getUser().getRealUser();
+
+    if (!key.getAuth().getUser().hasEffectiveUser())
+        euser = principal;
 
     if (auth.getMethod() != AuthMethod::TOKEN) {
         UserInformationProto * user = connectionContext.mutable_userinfo();
@@ -667,12 +775,12 @@ void RpcChannelImpl::buildConnectionContext(
         }
     }
 }
-
 void RpcChannelImpl::sendConnectionContent(const RpcAuth & auth) {
     WriteBuffer buffer;
     IpcConnectionContextProto connectionContext;
     RpcRequestHeaderProto rpcHeader;
     buildConnectionContext(connectionContext, auth);
+    std::string data;
     rpcHeader.set_callid(CONNECTION_CONTEXT_CALL_ID);
     rpcHeader.set_clientid(client.getClientId());
     rpcHeader.set_retrycount(INVALID_RETRY_COUNT);
@@ -682,7 +790,16 @@ void RpcChannelImpl::sendConnectionContent(const RpcAuth & auth) {
     int size = wrapper.getLength();
     buffer.writeBigEndian(size);
     wrapper.writeTo(buffer);
-    sock->writeFully(buffer.getBuffer(0), buffer.getDataSize(0),
+    int length = buffer.getDataSize(0);
+    data.resize(length);
+    memcpy(&data[0], buffer.getBuffer(0), length);
+
+    if (saslClient) {
+        SaslOutputWrapper wrapper(saslClient.get(), &client);
+        data = wrapper.wrap(data);
+    }
+
+    sock->writeFully(data.c_str(), data.length(),
                      key.getConf().getWriteTimeout());
     lastActivity = lastIdle = steady_clock::now();
 }
@@ -757,10 +874,11 @@ static exception_ptr HandlerRpcResponseException(exception_ptr e) {
 void RpcChannelImpl::readOneResponse(bool writeLock) {
     int readTimeout = key.getConf().getReadTimeout();
     std::vector<char> buffer(128);
+    std::vector<char> body(128);
     RpcResponseHeaderProto curRespHeader;
     RpcResponseHeaderProto::RpcStatusProto status;
-    uint32_t totalen, headerSize = 0, bodySize = 0;
-    totalen = in->readBigEndianInt32(readTimeout);
+    uint32_t headerSize = 0, bodySize = 0;
+    int discarded = in->readBigEndianInt32(readTimeout);
     /*
      * read response header
      */
@@ -773,10 +891,127 @@ void RpcChannelImpl::readOneResponse(bool writeLock) {
               "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse response header.",
               key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
     }
-
     lastActivity = steady_clock::now();
-    status = curRespHeader.status();
 
+    // We might have error outside of SASL wrapper as well as inside, so check twice
+    status = curRespHeader.status();
+    if (RpcResponseHeaderProto_RpcStatusProto_SUCCESS != status) {
+        /*
+         * on error, read error class and message
+         */
+        std::string errClass, errMessage;
+        errClass = curRespHeader.exceptionclassname();
+        errMessage = curRespHeader.errormsg();
+
+        if (RpcResponseHeaderProto_RpcStatusProto_ERROR == status) {
+            RpcRemoteCallPtr rc;
+            {
+                lock_guard<mutex> lock(writeMut);
+                rc = getPendingCall(curRespHeader.callid());
+            }
+
+            try {
+                THROW(HdfsRpcServerException, "%s: %s",
+                      errClass.c_str(), errMessage.c_str());
+            } catch (HdfsRpcServerException & e) {
+                e.setErrClass(errClass);
+                e.setErrMsg(errMessage);
+                rc->cancel(HandlerRpcResponseException(current_exception()));
+            }
+        } else { /*fatal*/
+            assert(RpcResponseHeaderProto_RpcStatusProto_FATAL == status);
+
+            if (errClass.empty()) {
+                THROW(HdfsRpcException, "%s: %s",
+                      errClass.c_str(), errMessage.c_str());
+            }
+
+            try {
+                THROW(HdfsRpcServerException, "%s: %s", errClass.c_str(),
+                      errMessage.c_str());
+            } catch (HdfsRpcServerException & e) {
+                e.setErrClass(errClass);
+                e.setErrMsg(errMessage);
+                rethrow_exception(HandlerRpcResponseException(current_exception()));
+            }
+        }
+        return;
+    }
+    bodySize = in->readVarint32(readTimeout);
+    if (bodySize > 0) {
+        body.resize(bodySize);
+        in->readFully(&body[0], bodySize, readTimeout);
+    }
+    if (saslClient && (saslClient->isPrivate() || saslClient->isIntegrity()) && saslComplete) {
+
+        if (curRespHeader.callid() != (unsigned)AuthProtocol::SASL) {
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel expected SASL wrapped message.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        }
+        RpcSaslProto msg;
+        if (!msg.ParseFromArray(&body[0], bodySize))
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel can't parse SASL wrapped message.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        if (msg.state() != RpcSaslProto_SaslState_WRAP)
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel expected SASL wrapped message data.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+
+        SaslInputWrapper wrapper(saslClient.get(), &client);
+
+        std::string data = wrapper.unwrap(msg.token());
+
+        CodedInputStream stream(reinterpret_cast<const uint8_t *>(data.c_str()), data.length());
+
+        bool ret = stream.ReadLittleEndian32((uint32*)&discarded);
+        if (!ret) {
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped message size.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        }
+        ret = stream.ReadVarint32(&headerSize);
+        if (!ret) {
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped response header size.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        }
+        buffer.resize(headerSize);
+        ret = stream.ReadRaw(&buffer[0], headerSize);
+        if (!ret) {
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped response header.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        }
+
+        if (!curRespHeader.ParseFromArray(&buffer[0], headerSize)) {
+            THROW(HdfsRpcException,
+                  "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped response header.",
+                  key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+        }
+
+        status = curRespHeader.status();
+        if (RpcResponseHeaderProto_RpcStatusProto_SUCCESS == status) {
+            ret = stream.ReadVarint32(&bodySize);
+            if (!ret) {
+                THROW(HdfsRpcException,
+                      "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped body size.",
+                      key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+            }
+            if (bodySize > 0) {
+                body.resize(bodySize);
+                ret = stream.ReadRaw(&body[0], bodySize);
+                if (!ret) {
+                    THROW(HdfsRpcException,
+                          "RPC channel to \"%s:%s\" got protocol mismatch: RPC channel cannot parse wrapped body.",
+                          key.getServer().getHost().c_str(), key.getServer().getPort().c_str())
+                }
+            }               
+        }
+    }
+
+    status = curRespHeader.status();
     if (RpcResponseHeaderProto_RpcStatusProto_SUCCESS == status) {
         /*
          * on success, read response body
@@ -790,16 +1025,9 @@ void RpcChannelImpl::readOneResponse(bool writeLock) {
             rc = getPendingCall(curRespHeader.callid());
         }
 
-        bodySize = in->readVarint32(readTimeout);
-        buffer.resize(bodySize);
-
-        if (bodySize > 0) {
-            in->readFully(&buffer[0], bodySize, readTimeout);
-        }
-
         Message * response = rc->getCall().getResponse();
 
-        if (!response->ParseFromArray(&buffer[0], bodySize)) {
+        if (!response->ParseFromArray(&body[0], bodySize)) {
             THROW(HdfsRpcException,
                   "RPC channel to \"%s:%s\" got protocol mismatch: rpc channel cannot parse response.",
                   key.getServer().getHost().c_str(), key.getServer().getPort().c_str())

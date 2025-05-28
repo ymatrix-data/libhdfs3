@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -27,6 +21,9 @@
  */
 #include "gtest/gtest.h"
 #include "client/hdfs.h"
+#include "client/HttpClient.h"
+#include "client/KmsClientProvider.h"
+#include "client/FileEncryptionInfo.h"
 #include "Logger.h"
 #include "SessionConfig.h"
 #include "TestUtil.h"
@@ -36,6 +33,11 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <limits>
+#include <stdlib.h>
+#include <sstream>
+#include <iostream>
+#include <openssl/md5.h>
+#include <stdio.h>
 
 using namespace Hdfs::Internal;
 
@@ -44,7 +46,10 @@ using namespace Hdfs::Internal;
 #endif
 
 #define BASE_DIR TEST_HDFS_PREFIX"/testCInterface/"
+#define MAXDATABUFF 1024
+#define MD5LENTH 16
 
+using namespace std;
 using Hdfs::CheckBuffer;
 
 static bool ReadFully(hdfsFS fs, hdfsFile file, char * buffer, size_t length) {
@@ -93,6 +98,40 @@ static bool CreateFile(hdfsFS fs, const char * path, int64_t blockSize,
     } while (0);
 
     return rc >= 0;
+}
+
+static void fileMD5(const char* strFilePath, char* result) {
+    MD5_CTX ctx;
+    int len = 0;
+    unsigned char buffer[1024] = { 0 };
+    unsigned char digest[16] = { 0 };
+    FILE *pFile = fopen(strFilePath, "rb");
+    MD5_Init(&ctx);
+    while ((len = fread(buffer, 1, 1024, pFile)) > 0) {
+        MD5_Update(&ctx, buffer, len);
+    }
+    MD5_Final(digest, &ctx);
+    fclose(pFile);
+    int i = 0;
+    char tmp[3] = { 0 };
+    for (i = 0; i < 16; i++) {
+        sprintf(tmp, "%02X", digest[i]);
+        strcat(result, tmp);
+    }
+}
+
+static void bufferMD5(const char* strFilePath, int size, char* result) {
+    unsigned char digest[16] = { 0 };
+    MD5_CTX ctx;
+    MD5_Init(&ctx);
+    MD5_Update(&ctx, strFilePath, size);
+    MD5_Final(digest, &ctx);
+    int i = 0;
+    char tmp[3] = { 0 };
+    for (i = 0; i < 16; i++) {
+        sprintf(tmp, "%02X", digest[i]);
+        strcat(result, tmp);
+    }
 }
 
 bool CheckFileContent(hdfsFS fs, const char * path, int64_t len, size_t offset) {
@@ -202,6 +241,149 @@ TEST(TestCInterfaceConnect, TestConnect_Success) {
     fs = hdfsConnectNewInstance(host.c_str(), port);
     ASSERT_TRUE(fs != NULL);
     ASSERT_EQ(hdfsDisconnect(fs), 0);
+}
+
+TEST(TestCInterfaceTDE, DISABLED_TestCreateEnRPC_Success) {
+    hdfsFS fs = NULL;
+    hdfsEncryptionZoneInfo * enInfo = NULL;
+    char * uri = NULL;
+    setenv("LIBHDFS3_CONF", "function-test.xml", 1);
+    struct hdfsBuilder * bld = hdfsNewBuilder();
+    assert(bld != NULL);
+    hdfsBuilderSetNameNode(bld, "default");
+    fs = hdfsBuilderConnect(bld);
+    ASSERT_TRUE(fs != NULL);
+    system("hadoop fs -rmr /TDE");
+    system("hadoop key create keytde");
+    system("hadoop fs -mkdir /TDE");
+    ASSERT_EQ(0, hdfsCreateEncryptionZone(fs, "/TDE", "keytde")); 
+    enInfo = hdfsGetEZForPath(fs, "/TDE");
+    ASSERT_TRUE(enInfo != NULL);
+    EXPECT_TRUE(enInfo->mKeyName != NULL);
+    std::cout << "----hdfsEncryptionZoneInfo----:" << " KeyName : " << enInfo->mKeyName << " Suite : " << enInfo->mSuite << " CryptoProtocolVersion : " << enInfo->mCryptoProtocolVersion << " Id : " << enInfo->mId << " Path : " << enInfo->mPath << std::endl;
+    hdfsFreeEncryptionZoneInfo(enInfo, 1);
+    for (int i = 0; i <= 10; i++){
+        std::stringstream newstr;
+        newstr << i;
+        std::string tde = "/TDE" + newstr.str();
+        std::string key = "keytde" + newstr.str();
+        std::string rmTde = "hadoop fs -rmr /TDE" + newstr.str();
+        std::string tdeKey = "hadoop key create keytde" + newstr.str();
+        std::string mkTde = "hadoop fs -mkdir /TDE" + newstr.str();
+        system(rmTde.c_str());
+        system(tdeKey.c_str());
+        system(mkTde.c_str());
+        ASSERT_EQ(0, hdfsCreateEncryptionZone(fs, tde.c_str(), key.c_str()));
+    } 
+    hdfsEncryptionZoneInfo * enZoneInfos = NULL;
+    int num = 0;
+    hdfsListEncryptionZones(fs, &num);
+    EXPECT_EQ(num, 12); 
+    ASSERT_EQ(hdfsDisconnect(fs), 0);
+    hdfsFreeBuilder(bld);
+}
+
+TEST(TestCInterfaceTDE, TestAppendWithTDE_Success) {
+    hdfsFS fs = NULL;
+    hdfsEncryptionZoneInfo * enInfo = NULL;
+    char * uri = NULL;
+    setenv("LIBHDFS3_CONF", "function-test.xml", 1);
+    struct hdfsBuilder * bld = hdfsNewBuilder();
+    assert(bld != NULL);
+    hdfsBuilderSetNameNode(bld, "default");
+    fs = hdfsBuilderConnect(bld);
+    hdfsBuilderSetUserName(bld, HDFS_SUPERUSER);
+    ASSERT_TRUE(fs != NULL);
+    system("hadoop fs -rmr /TDE");
+    system("hadoop key delete keytde4append -f");
+    system("hadoop key create keytde4append");
+    system("hadoop fs -mkdir /TDE");
+    ASSERT_EQ(0, hdfsCreateEncryptionZone(fs, "/TDE", "keytde4append"));
+    enInfo = hdfsGetEZForPath(fs, "/TDE");
+    ASSERT_TRUE(enInfo != NULL);
+    EXPECT_TRUE(enInfo->mKeyName != NULL);
+    hdfsFreeEncryptionZoneInfo(enInfo, 1);
+    const char *tdefile = "/TDE/testfile";
+    ASSERT_TRUE(CreateFile(fs, tdefile, 0, 0));
+
+    const char *buffer = "hello world";
+    hdfsFile out = hdfsOpenFile(fs, tdefile, O_WRONLY | O_APPEND, 0, 0, 0);
+    ASSERT_TRUE(out != NULL)<< hdfsGetLastError();
+    EXPECT_EQ(strlen(buffer), hdfsWrite(fs, out, (const void *)buffer, strlen(buffer)))
+            << hdfsGetLastError();
+    hdfsCloseFile(fs, out);
+    FILE *file = popen("hadoop fs -cat /TDE/testfile", "r");
+    char bufGets[128];
+    while (fgets(bufGets, sizeof(bufGets), file)) {
+    }
+    pclose(file);
+    ASSERT_STREQ(bufGets, buffer);
+    system("hadoop fs -rmr /TDE");
+    system("hadoop key delete keytde4append -f");
+    ASSERT_EQ(hdfsDisconnect(fs), 0);
+    hdfsFreeBuilder(bld);
+}
+
+TEST(TestCInterfaceTDE, TestAppendWithTDELargeFiles_Success) {
+    hdfsFS fs = NULL;
+    hdfsEncryptionZoneInfo * enInfo = NULL;
+    char * uri = NULL;
+    setenv("LIBHDFS3_CONF", "function-test.xml", 1);
+    struct hdfsBuilder * bld = hdfsNewBuilder();
+    assert(bld != NULL);
+    hdfsBuilderSetNameNode(bld, "default");
+    fs = hdfsBuilderConnect(bld);
+    ASSERT_TRUE(fs != NULL);
+
+    //creake key and encryption zone
+    system("hadoop fs -rmr /TDE");
+    system("hadoop key delete keytde4append -f");
+    system("hadoop key create keytde4append");
+    system("hadoop fs -mkdir /TDE");
+    ASSERT_EQ(0, hdfsCreateEncryptionZone(fs, "/TDE", "keytde4append"));
+    enInfo = hdfsGetEZForPath(fs, "/TDE");
+    ASSERT_TRUE(enInfo != NULL);
+    EXPECT_TRUE(enInfo->mKeyName != NULL);
+    hdfsFreeEncryptionZoneInfo(enInfo, 1);
+    const char *tdefile = "/TDE/testfile";
+    ASSERT_TRUE(CreateFile(fs, tdefile, 0, 0));
+
+    int size = 1024 * 32;
+    size_t offset = 0;
+    hdfsFile out;
+    int64_t todo = size;
+    std::vector<char> buffer(size);
+    int rc = -1;
+    do {
+        if (NULL == (out = hdfsOpenFile(fs, tdefile, O_WRONLY | O_APPEND, 0, 0, 1024))) {
+            break;
+        }
+        Hdfs::FillBuffer(&buffer[0], buffer.size(), 1024);
+        buffer.push_back(0);
+        while (todo > 0) {
+            if (0 > (rc = hdfsWrite(fs, out, &buffer[offset], todo))) {
+                break;
+            }
+            todo -= rc;
+            offset += rc;
+        }
+        rc = hdfsCloseFile(fs, out);
+    } while (0);
+    system("rm -rf ./testfile");
+    system("hadoop fs -get /TDE/testfile ./");
+    char resultFile[33] = { 0 };
+    fileMD5("./testfile", resultFile);
+    std::cout << "resultFile is " << resultFile << std::endl;
+    char resultBuffer[33] = { 0 };
+    LOG(INFO, "buffer is %s", &buffer[0]);
+    bufferMD5(&buffer[0], size, resultBuffer);
+    std::cout << "result is " << resultBuffer << std::endl;
+    ASSERT_STREQ(resultFile, resultBuffer);
+    system("rm ./testfile");
+    system("hadoop fs -rmr /TDE");
+    system("hadoop key delete keytde4append -f");
+    ASSERT_EQ(hdfsDisconnect(fs), 0);
+    hdfsFreeBuilder(bld);
 }
 
 
@@ -662,6 +844,62 @@ TEST_F(TestCInterface, TestRename_Success) {
     EXPECT_EQ(0, err);
 }
 
+TEST_F(TestCInterface, TestConcat_InvalidInput) {
+    hdfsFile file = NULL;
+    int err;
+    file = hdfsOpenFile(fs, BASE_DIR"/testFileConcatSrc", O_WRONLY, 0, 0, 0);
+    ASSERT_TRUE(NULL != file);
+    EXPECT_EQ(0, hdfsCloseFile(fs, file));
+    //test invalid input
+    const char *srcs[2];
+    srcs[0] = BASE_DIR"/testFileConcatSrc";
+    srcs[1] = NULL;
+    // Test invalid inputs
+    err = hdfsConcat(NULL, BASE_DIR"/testFileConcatTrg", &srcs[0]);
+    EXPECT_TRUE(0 != err && EINVAL == errno);
+    err = hdfsConcat(fs, NULL, &srcs[0]);
+    EXPECT_TRUE(0 != err && EINVAL == errno);
+    err = hdfsConcat(fs, "", &srcs[0]);
+    EXPECT_TRUE(0 != err && EINVAL == errno);
+    err = hdfsConcat(fs, BASE_DIR"/testFileConcatTrg", NULL);
+    EXPECT_TRUE(0 != err && EINVAL == errno);
+    srcs[0] = "";
+    err = hdfsConcat(fs, BASE_DIR"/testFileConcatTrg", &srcs[0]);
+    EXPECT_TRUE(0 != err && EINVAL == errno);
+}
+
+TEST_F(TestCInterface, TestConcat_Success) {
+    hdfsFile file = NULL;
+    int err;
+    const char *srcs[2];
+    char inputBuffer[8];
+    file = hdfsOpenFile(fs, BASE_DIR"/testFileConcatSrc",
+			O_WRONLY|O_CREAT|O_TRUNC, 0, 0, 0);
+    ASSERT_TRUE(NULL != file);
+    EXPECT_TRUE(4 == hdfsWrite(fs, file, "abcd", 4));
+    EXPECT_EQ(0, hdfsCloseFile(fs, file));
+    file = hdfsOpenFile(fs, BASE_DIR"/testFileConcatTrg",
+			O_WRONLY|O_CREAT|O_TRUNC, 0, 0, 0);
+    ASSERT_TRUE(NULL != file);
+    EXPECT_EQ(0, hdfsCloseFile(fs, file));
+    // concatenate a file
+    srcs[0] = BASE_DIR"/testFileConcatSrc";
+    srcs[1] = NULL;
+    err = hdfsConcat(fs, BASE_DIR"/testFileConcatTrg", srcs);
+    EXPECT_EQ(0, err);
+    err = hdfsExists(fs, BASE_DIR"/testFileConcatTrg");
+    EXPECT_EQ(0, err);
+    err = hdfsExists(fs, BASE_DIR"/testFileConcatSrc");
+    EXPECT_TRUE(0 != err);
+    file = hdfsOpenFile(fs, BASE_DIR"/testFileConcatTrg",
+			O_RDONLY, 0, 0, 0);
+    ASSERT_TRUE(NULL != file);
+    EXPECT_EQ(4, hdfsRead(fs, file, inputBuffer, 8));
+    inputBuffer[4] = '\0';
+    EXPECT_EQ(0, strcmp("abcd", inputBuffer));
+    EXPECT_EQ(0, hdfsCloseFile(fs, file));
+}
+
 TEST_F(TestCInterface, TestGetWorkingDirectory_InvalidInput) {
     char * ret, buffer[1024];
     //test invalid input
@@ -1006,7 +1244,7 @@ TEST_F(TestCInterface, TestUtime_Success) {
     EXPECT_EQ(0, err);
     info = hdfsGetPathInfo(fs, BASE_DIR"/testUtimeFile");
     ASSERT_TRUE(info);
-    EXPECT_TRUE(now == info->mLastAccess && info->mLastAccess);
+    EXPECT_TRUE(now / 1000 == info->mLastAccess && info->mLastAccess);
     hdfsFreeFileInfo(info, 1);
 }
 
@@ -1497,9 +1735,9 @@ TEST_F(TestCInterface, TestGetHANamenode) {
     EXPECT_TRUE(errno == EINVAL);
     ASSERT_TRUE(NULL != (namenodes = hdfsGetHANamenodes("phdcluster", &size)));
     ASSERT_EQ(2, size);
-    EXPECT_STREQ("mdw:9000", namenodes[0].rpc_addr);
+    EXPECT_STREQ("mdw:8020", namenodes[0].rpc_addr);
     EXPECT_STREQ("mdw:50070", namenodes[0].http_addr);
-    EXPECT_STREQ("smdw:9000", namenodes[1].rpc_addr);
+    EXPECT_STREQ("smdw:8020", namenodes[1].rpc_addr);
     EXPECT_STREQ("smdw:50070", namenodes[1].http_addr);
     EXPECT_NO_THROW(hdfsFreeNamenodeInformation(namenodes, size));
 }
@@ -1550,3 +1788,44 @@ TEST_F(TestCInterface, TestGetBlockFileLocations_Success) {
     hdfsCloseFile(fs, out);
 }
 
+TEST_F(TestCInterface, TestGetHosts_Failure) {
+    EXPECT_TRUE(NULL == hdfsGetHosts(NULL, NULL, 0, 0));
+    EXPECT_TRUE(errno == EINVAL);
+    EXPECT_TRUE(NULL == hdfsGetHosts(fs, NULL, 0, 0));
+    EXPECT_TRUE(errno == EINVAL);
+    EXPECT_TRUE(NULL == hdfsGetHosts(fs, "", 0, 0));
+    EXPECT_TRUE(errno == EINVAL);
+    EXPECT_TRUE(NULL == hdfsGetHosts(fs, "NOTEXIST", 0, 0));
+    EXPECT_TRUE(errno == EINVAL);
+    EXPECT_TRUE(NULL == hdfsGetHosts(fs, "NOTEXIST", -1, 1));
+    EXPECT_TRUE(errno == EINVAL);
+    EXPECT_TRUE(NULL == hdfsGetHosts(fs, "NOTEXIST", 0, 1));
+    EXPECT_TRUE(errno == ENOENT);
+}
+
+TEST_F(TestCInterface, TestGetHosts_Success) {
+    char ***hosts;
+    hdfsFile out = NULL;
+    std::vector<char> buffer(1025);
+    out = hdfsOpenFile(fs, BASE_DIR "/TestGetHosts_Success", O_WRONLY, 0, 0,
+                       1024);
+    ASSERT_TRUE(NULL != out);
+    hdfsCloseFile(fs, out);
+    hosts = hdfsGetHosts(fs, BASE_DIR "/TestGetHosts_Success", 0, 1);
+    EXPECT_TRUE(NULL != hosts);
+    EXPECT_TRUE(NULL == hosts[0]);
+    hdfsFreeHosts(hosts);
+    out = hdfsOpenFile(fs, BASE_DIR "/TestGetHosts_Success", O_WRONLY, 0, 0,
+                       1024);
+    ASSERT_TRUE(NULL != out);
+    ASSERT_TRUE(buffer.size() == hdfsWrite(fs, out, &buffer[0], buffer.size()));
+    ASSERT_TRUE(0 == hdfsSync(fs, out));
+    hosts =
+        hdfsGetHosts(fs, BASE_DIR "/TestGetHosts_Success", 0, buffer.size());
+    EXPECT_TRUE(NULL != hosts);
+    EXPECT_TRUE(NULL != hosts[0]);
+    EXPECT_TRUE(NULL != hosts[1]);
+    EXPECT_TRUE(NULL == hosts[2]);
+    hdfsFreeHosts(hosts);
+    hdfsCloseFile(fs, out);
+}

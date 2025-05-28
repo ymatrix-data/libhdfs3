@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -76,7 +70,15 @@ static uint32_t GetInitNamenodeIndex(const std::string id) {
         /*
          * created file, initialize it with 0
          */
-        write(fd, &index, sizeof(index));
+        if (write(fd, &index, sizeof(index)) < 0) {
+          LOG(WARNING,
+              "NamenodeProxy: Failed to write current Namenode index into "
+              "cache file.");
+            /*
+             * ignore the failure.
+             */
+        }
+
         flock(fd, LOCK_UN);
         close(fd);
         return index;
@@ -126,7 +128,14 @@ static void SetInitNamenodeIndex(const std::string & id, uint32_t index) {
             return;
         }
 
-        write(fd, &index, sizeof(index));
+        if (write(fd, &index, sizeof(index)) < 0) {
+            LOG(WARNING,
+                "NamenodeProxy: Failed to write current Namenode index into "
+                "cache file.");
+            /*
+             * ignore the failure.
+             */
+        }
         flock(fd, LOCK_UN);
         close(fd);
     }
@@ -231,6 +240,14 @@ void NamenodeProxy::getBlockLocations(const std::string & src, int64_t offset,
     NAMENODE_HA_RETRY_END();
 }
 
+EncryptionKey NamenodeProxy::getEncryptionKeys() {
+    EncryptionKey key;    
+    NAMENODE_HA_RETRY_BEGIN();
+    return namenode->getEncryptionKeys();
+    NAMENODE_HA_RETRY_END();
+    return key;
+}
+   
 void NamenodeProxy::create(const std::string & src, const Permission & masked,
                            const std::string & clientName, int flag, bool createParent,
                            short replication, int64_t blockSize) {
@@ -324,20 +341,20 @@ bool NamenodeProxy::rename(const std::string & src, const std::string & dst) {
     return false;
 }
 
-/*
 void NamenodeProxy::concat(const std::string & trg,
                            const std::vector<std::string> & srcs) {
     NAMENODE_HA_RETRY_BEGIN();
     namenode->concat(trg, srcs);
     NAMENODE_HA_RETRY_END();
 }
-*/
 
 bool NamenodeProxy::truncate(const std::string & src, int64_t size,
                              const std::string & clientName) {
+    bool ret = false;
     NAMENODE_HA_RETRY_BEGIN();
     return namenode->truncate(src, size, clientName);
     NAMENODE_HA_RETRY_END();
+    return ret;
 }
 
 void NamenodeProxy::getLease(const std::string & src,
@@ -410,9 +427,9 @@ std::vector<int64_t> NamenodeProxy::getFsStats() {
     NAMENODE_HA_RETRY_END();
 }*/
 
-FileStatus NamenodeProxy::getFileInfo(const std::string & src) {
+FileStatus NamenodeProxy::getFileInfo(const std::string & src, bool *exist) {
     NAMENODE_HA_RETRY_BEGIN();
-    return namenode->getFileInfo(src);
+    return namenode->getFileInfo(src, exist);
     NAMENODE_HA_RETRY_END();
     assert(!"should not reach here");
     return FileStatus();
@@ -513,6 +530,30 @@ void NamenodeProxy::cancelDelegationToken(const Token & token) {
 void NamenodeProxy::close() {
     lock_guard<mutex> lock(mut);
     namenodes.clear();
+}
+
+bool NamenodeProxy::createEncryptionZone(const std::string & src, const std::string & keyName) {
+    NAMENODE_HA_RETRY_BEGIN();
+    return namenode->createEncryptionZone(src, keyName);
+    NAMENODE_HA_RETRY_END();
+    assert(!"should not reach here");
+    return false;
+}
+
+EncryptionZoneInfo NamenodeProxy::getEncryptionZoneInfo(const std::string & src, bool *exist) {
+    NAMENODE_HA_RETRY_BEGIN();
+    return namenode->getEncryptionZoneInfo(src, exist);
+    NAMENODE_HA_RETRY_END();
+    assert(!"should not reach here");
+    return EncryptionZoneInfo();
+}
+
+bool NamenodeProxy::listEncryptionZones(const int64_t id, std::vector<EncryptionZoneInfo> & ezl) {
+    NAMENODE_HA_RETRY_BEGIN();
+    return namenode->listEncryptionZones(id, ezl);
+    NAMENODE_HA_RETRY_END();
+    assert(!"should not reach here");
+    return false;
 }
 
 }

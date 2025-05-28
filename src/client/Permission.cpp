@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -33,7 +27,10 @@
 namespace Hdfs {
 
 Permission::Permission(uint16_t mode) {
-    if (mode >> 10) {
+	uint16_t fileEncryptionBit = (1 << 13);
+	bool isFileEncryption = (((mode & fileEncryptionBit) != 0) ? true : false);
+
+    if (!isFileEncryption && mode >> 14) {
         THROW(InvalidParameter,
               "Invalid parameter: cannot convert %u to \"Permission\"",
               static_cast<unsigned int>(mode));

@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -45,6 +39,23 @@ DatanodeImpl::DatanodeImpl(const std::string & host, uint32_t port,
     auth(a), client(RpcClient::getClient()), conf(c), protocol(
         DATANODE_VERSION, DATANODE_PROTOCOL, BLOCK_TOKEN_KIND), server(host, port) {
     server.setTokenService("");
+}
+
+void DatanodeImpl::sendPing() {
+    RpcChannel & channel = client.getChannel(auth, protocol, server, conf);
+    try {
+        channel.Ping();
+    } catch (const HdfsFailoverException & e) {
+        //Datanode do not have HA configuration.
+        channel.close(true);
+        Hdfs::rethrow_if_nested(e);
+        assert(false && "HdfsFailoverException should be always a wrapper of other exception");
+    } catch (...) {
+        channel.close(true);
+        throw;
+    }
+
+    channel.close(false);
 }
 
 void DatanodeImpl::invoke(const RpcCall & call, bool reuse) {

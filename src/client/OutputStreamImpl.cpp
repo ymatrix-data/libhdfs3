@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -49,7 +43,7 @@ OutputStreamImpl::OutputStreamImpl() :
 /*heartBeatStop(true),*/ closed(true), isAppend(false), syncBlock(false), checksumSize(0), chunkSize(
         0), chunksPerPacket(0), closeTimeout(0), heartBeatInterval(0), packetSize(0), position(
             0), replication(0), blockSize(0), bytesWritten(0), cursor(0), lastFlushed(
-                0), nextSeqNo(0), packets(0) {
+                0), nextSeqNo(0), packets(0), cryptoCodec(NULL), kcp(NULL) {
     if (HWCrc32c::available()) {
         checksum = shared_ptr < Checksum > (new HWCrc32c());
     } else {
@@ -92,6 +86,21 @@ void OutputStreamImpl::setError(const exception_ptr & error) {
     }
 }
 
+shared_ptr<CryptoCodec> OutputStreamImpl::getCryptoCodec() {
+    return cryptoCodec;
+}
+
+void OutputStreamImpl::setCryptoCodec(shared_ptr<CryptoCodec> cryptoCodec) {
+    this->cryptoCodec = cryptoCodec;
+}
+
+shared_ptr<KmsClientProvider> OutputStreamImpl::getKmsClientProvider() {
+    return kcp;
+}
+
+void OutputStreamImpl::setKmsClientProvider(shared_ptr<KmsClientProvider> kcp) {
+    this->kcp = kcp;
+}
 /**
  * To create or append a file.
  * @param fs hdfs file system.
@@ -242,6 +251,15 @@ void OutputStreamImpl::openInternal(shared_ptr<FileSystemInter> fs, const char *
 
     try {
         if (flag & Append) {
+            fileStatus = fs->getFileStatus(this->path.c_str());
+            FileEncryptionInfo *fileEnInfo = fileStatus.getFileEncryption();
+            if (fileStatus.isFileEncrypted()) {
+                if (cryptoCodec == NULL) {
+                    auth = shared_ptr<RpcAuth> (new RpcAuth(fs->getUserInfo(), RpcAuth::ParseMethod(conf->getKmsMethod())));
+                    kcp = shared_ptr<KmsClientProvider> (new KmsClientProvider(auth, conf));
+                    cryptoCodec = shared_ptr<CryptoCodec> (new CryptoCodec(fileEnInfo, kcp, conf->getCryptoBufferSize()));
+                }
+            }
             initAppend();
             LeaseRenewer::GetLeaseRenewer().StartRenew(filesystem);
             return;
@@ -254,7 +272,21 @@ void OutputStreamImpl::openInternal(shared_ptr<FileSystemInter> fs, const char *
 
     assert((flag & Create) || (flag & Overwrite));
     fs->create(this->path, permission, flag, createParent, this->replication,
-               this->blockSize);
+            this->blockSize);
+    fileStatus = fs->getFileStatus(this->path.c_str());
+    FileEncryptionInfo *fileEnInfo = fileStatus.getFileEncryption();
+    if (fileStatus.isFileEncrypted()) {
+        if (cryptoCodec == NULL) {
+            auth = shared_ptr<RpcAuth>(
+                    new RpcAuth(fs->getUserInfo(),
+                            RpcAuth::ParseMethod(conf->getKmsMethod())));
+            kcp = shared_ptr<KmsClientProvider>(
+                    new KmsClientProvider(auth, conf));
+            cryptoCodec = shared_ptr<CryptoCodec>(
+                    new CryptoCodec(fileEnInfo, kcp,
+                            conf->getCryptoBufferSize()));
+        }
+    }
     closed = false;
     computePacketChunkSize();
     LeaseRenewer::GetLeaseRenewer().StartRenew(filesystem);
@@ -284,7 +316,12 @@ void OutputStreamImpl::append(const char * buf, int64_t size) {
 
 void OutputStreamImpl::appendInternal(const char * buf, int64_t size) {
     int64_t todo = size;
+	std::string bufEncode;
+    if (fileStatus.isFileEncrypted()) {
+		bufEncode = cryptoCodec->encode(buf, size);
+        buf = bufEncode.c_str();
 
+    }
     while (todo > 0) {
         int batch = buffer.size() - position;
         batch = batch < todo ? batch : static_cast<int>(todo);

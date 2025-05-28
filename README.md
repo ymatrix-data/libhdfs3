@@ -1,6 +1,5 @@
 libhdfs3
 ========================
-[![Build Status](https://travis-ci.org/PivotalRD/libhdfs3.svg?branch=apache-rpc-9)](https://travis-ci.org/PivotalRD/libhdfs3)
 
 **A Native C/C++ HDFS Client**
 
@@ -11,8 +10,6 @@ The Hadoop Distributed File System (HDFS) is a distributed file system designed 
 HDFS is implemented in JAVA language and additionally provides a JNI based C language library *libhdfs*. To use libhdfs, users must deploy the HDFS jars on every machine. This adds operational complexity for non-Java clients that just want to integrate with HDFS.
 
 **Libhdfs3**, designed as an alternative implementation of libhdfs, is implemented based on native Hadoop RPC protocol and HDFS data transfer protocol. It gets rid of the drawbacks of JNI, and it has a lightweight, small memory footprint code base. In addition, it is easy to use and deploy.
-
-Libhdfs3 is developed by [Pivotal](http://www.pivotal.io/) and used in HAWQ, which is a massive parallel database engine in [Pivotal Hadoop Distribution](http://www.pivotal.io/big-data/pivotal-hd).
 
 ========================
 ## Installation
@@ -27,7 +24,8 @@ To build libhdfs3, the following libraries are needed.
     libxml2                         http://www.xmlsoft.org/
     kerberos                        http://web.mit.edu/kerberos/
     libuuid                         http://sourceforge.net/projects/libuuid/
-    libgsasl                        http://www.gnu.org/software/gsasl/
+    libgsasl                        http://www.gnu.org/software/gsasl/ (need https://github.com/bdrosen96/libgsasl)
+    openssl                         https://www.openssl.org/
 
 To run tests, the following libraries are needed.
 
@@ -63,18 +61,6 @@ To build concurrently, rum make with -j option.
 
     make -j8
 
-#### Build from Docker image
-
-This repository contains a Docker image file that serves as example of how this library can be built.
-
-To build the image, execute the following command from your system shell:
-
-```sh
-docker build . -t libhdfs3-build
-```
-
-Note that the image starts from ubuntu 18.04
-
 ### Test
 
 To do unit test, run command
@@ -94,6 +80,3 @@ To show code coverage result, run command. Code coverage result can be found at 
 To install libhdfs3, run command
 
     make install
-
-## Wiki
-https://github.com/PivotalRD/libhdfs3/wiki

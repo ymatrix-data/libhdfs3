@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -30,10 +24,14 @@
 
 #include "BlockLocation.h"
 #include "DirectoryIterator.h"
+#include "EncryptionZoneIterator.h"
 #include "FileStatus.h"
 #include "FileSystemStats.h"
+#include "EncryptionZoneInfo.h"
 #include "Permission.h"
 #include "XmlConfig.h"
+#include "server/EncryptionKey.h"
+#include "common/SessionConfig.h"
 
 #include <vector>
 
@@ -50,6 +48,8 @@ public:
      * @param conf hdfs configuration
      */
     FileSystem(const Config & conf);
+    
+    FileSystem(const Config & conf, const char * effective_user);
 
     /**
      * Copy construct of FileSystem
@@ -71,6 +71,10 @@ public:
      */
     void connect();
 
+    // TODO
+    std::string effective_user;
+
+
     /**
      * Connect to hdfs
      * @param uri hdfs connection uri, hdfs://host:port
@@ -90,6 +94,8 @@ public:
      * disconnect from hdfs
      */
     void disconnect();
+
+    Internal::EncryptionKey getEncryptionKeys();
 
     /**
      * To get default number of replication.
@@ -214,6 +220,14 @@ public:
     bool rename(const char * src, const char * dst);
 
     /**
+     * To move the blocks from a list of files into a new file.
+     * @param trg new file path.
+     * @param srcs list of source file paths.
+     * @return return true if success.
+     */
+    void concat(const char * src, const char **srcs);
+
+    /**
      * To set working directory.
      * @param path new working directory.
      */
@@ -281,6 +295,41 @@ public:
      * @throws IOException
      */
     void cancelDelegationToken(const std::string & token);
+
+    /**
+     * Create encryption zone for the directory with specific key name
+     * @param path the directory path which is to be created.
+     * @param keyname The key name of the encryption zone 
+     * @return return true if success.
+     */
+    bool createEncryptionZone(const char * path, const char * keyName);
+    
+    /**
+     * To get encryption zone information.
+     * @param path the path which information is to be returned.
+     * @return the encryption zone information.
+     */
+    EncryptionZoneInfo getEZForPath(const char * path);
+
+    /**
+     * list the contents of an encryption zone;
+     * @return Return a iterator to visit all elements in this encryption zone.
+     */
+    EncryptionZoneIterator listEncryptionZone();
+
+
+   /**
+    * list all the contents of encryption zones.
+    * @param id the index of encryption zones.
+    * @return Return a vector of encryption zones information..
+    */
+    std::vector<EncryptionZoneInfo> listAllEncryptionZoneItems();
+
+
+    /*
+     * get session configuration
+     */
+    Internal::SessionConfig & getConf();
 
 private:
     Config conf;

@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -51,37 +45,24 @@ extern "C" {
 
 #define KERBEROS_TICKET_CACHE_PATH "hadoop.security.kerberos.ticket.cache.path"
 
-static THREAD_LOCAL const char * ErrorMessage = NULL;
-static THREAD_LOCAL std::string * ErrorMessageBuffer = NULL;
-static THREAD_LOCAL Hdfs::Internal::once_flag once;
+#ifndef ERROR_MESSAGE_BUFFER_SIZE
+#define ERROR_MESSAGE_BUFFER_SIZE 4096
+#endif
 
-static void CreateMessageBuffer() {
-    ErrorMessageBuffer = new std::string;
-}
-
-static void InitMessageBuffer() {
-    Hdfs::Internal::call_once(once, &CreateMessageBuffer);
-    assert(ErrorMessageBuffer != NULL);
-}
+static THREAD_LOCAL char ErrorMessage[ERROR_MESSAGE_BUFFER_SIZE] = "Success";
 
 static void SetLastException(Hdfs::exception_ptr e) {
-    InitMessageBuffer();
-    ErrorMessage = Hdfs::Internal::GetExceptionMessage(e, *ErrorMessageBuffer);
+    std::string buffer;
+    const char *p;
+    p = Hdfs::Internal::GetExceptionMessage(e, buffer);
+    strncpy(ErrorMessage, p, sizeof(ErrorMessage) - 1);
+    ErrorMessage[sizeof(ErrorMessage) - 1] = 0;
 }
 
-static void SetErrorMessage(const char * msg) {
+static void SetErrorMessage(const char *msg) {
     assert(NULL != msg);
-    InitMessageBuffer();
-    *ErrorMessageBuffer = msg;
-    ErrorMessage = ErrorMessageBuffer->c_str();
-}
-
-/*
- * msg should has static storage.
- */
-static void SetConstErrorMessage(const char * msg) {
-    assert(NULL != msg);
-    ErrorMessage = msg;
+    strncpy(ErrorMessage, msg, sizeof(ErrorMessage) - 1);
+    ErrorMessage[sizeof(ErrorMessage) - 1] = 0;
 }
 
 #define PARAMETER_ASSERT(para, retval, eno) \
@@ -256,8 +237,9 @@ static void handleException(Hdfs::exception_ptr error) {
         Hdfs::rethrow_exception(error);
 
 #ifndef NDEBUG
+        std::string buffer;
         LOG(Hdfs::Internal::LOG_ERROR, "Handle Exception: %s",
-            Hdfs::Internal::GetExceptionDetail(error));
+            Hdfs::Internal::GetExceptionDetail(error, buffer));
 #endif
     } catch (Hdfs::AccessControlException &) {
         errno = EACCES;
@@ -322,11 +304,13 @@ static void handleException(Hdfs::exception_ptr error) {
     } catch (Hdfs::RecoveryInProgressException &){
         errno = EBUSY;
     } catch (Hdfs::HdfsIOException &) {
-        LOG(Hdfs::Internal::LOG_ERROR, "Handle Exception: %s", Hdfs::Internal::GetExceptionDetail(error));
+        std::string buffer;
+        LOG(Hdfs::Internal::LOG_ERROR, "Handle Exception: %s", Hdfs::Internal::GetExceptionDetail(error, buffer));
         errno = EIO;
     } catch (Hdfs::HdfsException & e) {
+        std::string buffer;
         LOG(Hdfs::Internal::LOG_ERROR, "Unexpected exception %s: %s", typeid(e).name(),
-            Hdfs::Internal::GetExceptionDetail(e));
+            Hdfs::Internal::GetExceptionDetail(e, buffer));
         errno = EINTERNAL;
     } catch (std::exception & e) {
         LOG(Hdfs::Internal::LOG_ERROR, "Unexpected exception %s: %s", typeid(e).name(), e.what());
@@ -335,10 +319,6 @@ static void handleException(Hdfs::exception_ptr error) {
 }
 
 const char * hdfsGetLastError() {
-    if (ErrorMessage == NULL) {
-        return "Success";
-    }
-
     return ErrorMessage;
 }
 
@@ -423,7 +403,7 @@ hdfsFS hdfsConnectNewInstance(const char * host, tPort port) {
     return retVal;
 }
 
-hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld) {
+hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld, const char * effective_user) {
     PARAMETER_ASSERT(bld && !bld->nn.empty(), NULL, EINVAL);
     Hdfs::Internal::SessionConfig conf(*bld->conf);
     std::string uri;
@@ -479,7 +459,7 @@ hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld) {
             xmlFreeURI(uriobj);
         }
 
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
         return NULL;
     } catch (...) {
@@ -495,7 +475,7 @@ hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld) {
     xmlFreeURI(uriobj);
 
     try {
-        fs = new FileSystem(*bld->conf);
+        fs = new FileSystem(*bld->conf, effective_user);
 
         if (!bld->token.empty()) {
             fs->connect(uri.c_str(), NULL, bld->token.c_str());
@@ -505,7 +485,7 @@ hdfsFS hdfsBuilderConnect(struct hdfsBuilder * bld) {
 
         return new HdfsFileSystemInternalWrapper(fs);
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         delete fs;
         errno = ENOMEM;
     } catch (...) {
@@ -521,7 +501,7 @@ struct hdfsBuilder * hdfsNewBuilder(void) {
     try {
         return new struct hdfsBuilder;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -581,7 +561,7 @@ int hdfsBuilderConfSetStr(struct hdfsBuilder * bld, const char * key,
         bld->conf->set(key, val);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -599,7 +579,7 @@ int hdfsConfGetStr(const char * key, char ** val) {
         *val = Strdup(retval.c_str());
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -620,7 +600,7 @@ int hdfsConfGetInt(const char * key, int32_t * val) {
         *val = DefaultConfig().getConfig()->getInt32(key);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -640,7 +620,7 @@ int hdfsDisconnect(hdfsFS fs) {
         return 0;
     } catch (const std::bad_alloc & e) {
         delete fs;
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         delete fs;
@@ -652,11 +632,6 @@ int hdfsDisconnect(hdfsFS fs) {
 }
 
 hdfsFile hdfsOpenFile(hdfsFS fs, const char * path, int flags, int bufferSize,
-                      short replication, tOffset blocksize) {
-    return hdfsOpenFile2(fs, NULL, path, flags, bufferSize, replication, blocksize);
-}
-
-hdfsFile hdfsOpenFile2(hdfsFS fs, const char *hostname, const char * path, int flags, int bufferSize,
                       short replication, tOffset blocksize) {
     PARAMETER_ASSERT(fs && path && strlen(path) > 0, NULL, EINVAL);
     PARAMETER_ASSERT(bufferSize >= 0 && replication >= 0 && blocksize >= 0, NULL, EINVAL);
@@ -671,7 +646,7 @@ hdfsFile hdfsOpenFile2(hdfsFS fs, const char *hostname, const char * path, int f
         if ((flags & O_CREAT) || (flags & O_APPEND) || (flags & O_WRONLY)) {
             int internalFlags = 0;
 
-            if (flags & O_CREAT) {
+            if (flags & O_CREAT)  {
                 internalFlags |= Hdfs::Create;
             } else if ((flags & O_APPEND) && (flags & O_WRONLY)) {
                 internalFlags |= Hdfs::Create;
@@ -693,10 +668,7 @@ hdfsFile hdfsOpenFile2(hdfsFS fs, const char *hostname, const char * path, int f
         } else {
             file->setInput(true);
             is = new InputStream;
-            if(hostname != NULL) {
-                is->setHostname(hostname);
-            }
-            is->open(fs->getFilesystem(), path, true);
+            is->open(fs->getFilesystem(), path, fs->getFilesystem().getConf().getEnableVerify());
             file->setStream(is);
         }
 
@@ -705,7 +677,7 @@ hdfsFile hdfsOpenFile2(hdfsFS fs, const char *hostname, const char * path, int f
         delete file;
         delete os;
         delete is;
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         delete file;
@@ -735,7 +707,7 @@ int hdfsCloseFile(hdfsFS fs, hdfsFile file) {
         return 0;
     } catch (const std::bad_alloc & e) {
         delete file;
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         delete file;
@@ -752,7 +724,7 @@ int hdfsExists(hdfsFS fs, const char * path) {
     try {
         return fs->getFilesystem().exist(path) ? 0 : -1;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -770,7 +742,7 @@ int hdfsSeek(hdfsFS fs, hdfsFile file, tOffset desiredPos) {
         file->getInputStream().seek(desiredPos);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -790,7 +762,7 @@ tOffset hdfsTell(hdfsFS fs, hdfsFile file) {
             return file->getOutputStream().tell();
         }
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -809,7 +781,7 @@ tSize hdfsRead(hdfsFS fs, hdfsFile file, void * buffer, tSize length) {
     } catch (const Hdfs::HdfsEndOfStream & e) {
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -828,7 +800,7 @@ tSize hdfsWrite(hdfsFS fs, hdfsFile file, const void * buffer, tSize length) {
                                        length);
         return length;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -851,7 +823,7 @@ int hdfsHFlush(hdfsFS fs, hdfsFile file) {
         file->getOutputStream().flush();
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -869,7 +841,7 @@ int hdfsSync(hdfsFS fs, hdfsFile file) {
         file->getOutputStream().sync();
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -888,7 +860,7 @@ int hdfsAvailable(hdfsFS fs, hdfsFile file) {
         int64_t retval = file->getInputStream().available();
         return retval < max ? retval : max;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -898,13 +870,31 @@ int hdfsAvailable(hdfsFS fs, hdfsFile file) {
     return -1;
 }
 
+int hdfsCopy(hdfsFS srcFS, const char *src, hdfsFS dstFS, const char *dst) {
+    PARAMETER_ASSERT(srcFS && dstFS, -1, EINVAL);
+    PARAMETER_ASSERT(src && strlen(src) > 0, -1, EINVAL);
+    PARAMETER_ASSERT(dst && strlen(dst) > 0, -1, EINVAL);
+
+    errno = ENOTSUP;
+    return -1;
+}
+
+int hdfsMove(hdfsFS srcFS, const char *src, hdfsFS dstFS, const char *dst) {
+    PARAMETER_ASSERT(srcFS && dstFS, -1, EINVAL);
+    PARAMETER_ASSERT(src && strlen(src) > 0, -1, EINVAL);
+    PARAMETER_ASSERT(dst && strlen(dst) > 0, -1, EINVAL);
+
+    errno = ENOTSUP;
+    return -1;
+}
+
 int hdfsDelete(hdfsFS fs, const char * path, int recursive) {
     PARAMETER_ASSERT(fs && path && strlen(path) > 0, -1, EINVAL);
 
     try {
         return fs->getFilesystem().deletePath(path, recursive) ? 0 : -1;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -921,7 +911,27 @@ int hdfsRename(hdfsFS fs, const char * oldPath, const char * newPath) {
     try {
         return fs->getFilesystem().rename(oldPath, newPath) ? 0 : -1;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
+        errno = ENOMEM;
+    } catch (...) {
+        SetLastException(Hdfs::current_exception());
+        handleException(Hdfs::current_exception());
+    }
+
+    return -1;
+}
+
+int hdfsConcat(hdfsFS fs, const char *trg, const char **srcs) {
+    PARAMETER_ASSERT(fs && trg && srcs && strlen(trg) > 0, -1, EINVAL);
+    for (const char **p = srcs; *p != NULL; ++p) {
+        PARAMETER_ASSERT(strlen(*p) > 0, -1, EINVAL);
+    }
+
+    try {
+        fs->getFilesystem().concat(trg, srcs);
+        return 0;
+    } catch (const std::bad_alloc & e) {
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -940,7 +950,7 @@ char * hdfsGetWorkingDirectory(hdfsFS fs, char * buffer, size_t bufferSize) {
         strncpy(buffer, retval.c_str(), bufferSize);
         return buffer;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -957,7 +967,7 @@ int hdfsSetWorkingDirectory(hdfsFS fs, const char * path) {
         fs->getFilesystem().setWorkingDirectory(path);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -973,7 +983,26 @@ int hdfsCreateDirectory(hdfsFS fs, const char * path) {
     try {
         return fs->getFilesystem().mkdirs(path, 0755) ? 0 : -1;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
+        errno = ENOMEM;
+    } catch (...) {
+        SetLastException(Hdfs::current_exception());
+        handleException(Hdfs::current_exception());
+    }
+
+    return -1;
+}
+
+int hdfsCreateDirectoryEx(hdfsFS fs, const char * path, short mode, int createParents) {
+    PARAMETER_ASSERT(fs && path && strlen(path) > 0, -1, EINVAL);
+
+    try {
+        if (createParents)
+            return fs->getFilesystem().mkdirs(path, mode) ? 0 : -1;
+        else
+            return fs->getFilesystem().mkdir(path, mode) ? 0 : -1;
+    } catch (const std::bad_alloc & e) {
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -989,7 +1018,7 @@ int hdfsSetReplication(hdfsFS fs, const char * path, int16_t replication) {
     try {
         return fs->getFilesystem().setReplication(path, replication) ? 0 : -1;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -999,8 +1028,31 @@ int hdfsSetReplication(hdfsFS fs, const char * path, int16_t replication) {
     return -1;
 }
 
+static void ConstructHdfsEncryptionZoneInfo(hdfsEncryptionZoneInfo * infoEn,
+                                  std::vector<Hdfs::EncryptionZoneInfo> & enStatus) {
+    size_t size = enStatus.size();
+
+    for (size_t i = 0; i < size; ++i) {
+        infoEn[i].mSuite = enStatus[i].getSuite();
+        infoEn[i].mCryptoProtocolVersion = enStatus[i].getCryptoProtocolVersion();
+        infoEn[i].mId = enStatus[i].getId();
+        infoEn[i].mPath = Strdup(enStatus[i].getPath());
+        infoEn[i].mKeyName = Strdup(enStatus[i].getKeyName());
+    }
+}
+
+static void ConstructHdfsEncryptionFileInfo(hdfsEncryptionFileInfo * infoEn,
+                                  Hdfs::FileEncryptionInfo* enStatus) {
+    infoEn->mSuite = enStatus->getSuite();
+    infoEn->mCryptoProtocolVersion = enStatus->getCryptoProtocolVersion();
+    infoEn->mKey = const_cast<char*>(enStatus->getKey().c_str());
+    infoEn->mKeyName = const_cast<char*>(enStatus->getKeyName().c_str());
+    infoEn->mIv = const_cast<char*>(enStatus->getIv().c_str());
+    infoEn->mEzKeyVersionName = const_cast<char*>(enStatus->getEzKeyVersionName().c_str());
+}
+
 static void ConstructHdfsFileInfo(hdfsFileInfo * infos,
-                                  const std::vector<Hdfs::FileStatus> & status) {
+                                  std::vector<Hdfs::FileStatus> & status) {
     size_t size = status.size();
 
     for (size_t i = 0; i < size; ++i) {
@@ -1009,13 +1061,20 @@ static void ConstructHdfsFileInfo(hdfsFileInfo * infos,
         infos[i].mKind =
             status[i].isDirectory() ?
             kObjectKindDirectory : kObjectKindFile;
-        infos[i].mLastAccess = status[i].getAccessTime();
-        infos[i].mLastMod = status[i].getModificationTime();
+        infos[i].mLastAccess = status[i].getAccessTime() / 1000;
+        infos[i].mLastMod = status[i].getModificationTime() / 1000;
         infos[i].mName = Strdup(status[i].getPath());
         infos[i].mOwner = Strdup(status[i].getOwner());
         infos[i].mPermissions = status[i].getPermission().toShort();
         infos[i].mReplication = status[i].getReplication();
         infos[i].mSize = status[i].getLength();
+        infos[i].mHdfsEncryptionFileInfo = NULL;
+        if (status[i].isFileEncrypted()) {
+             infos[i].mHdfsEncryptionFileInfo = new hdfsEncryptionFileInfo[1];
+             memset(infos[i].mHdfsEncryptionFileInfo, 0, sizeof(hdfsEncryptionFileInfo));
+             ConstructHdfsEncryptionFileInfo(infos[i].mHdfsEncryptionFileInfo, status[i].getFileEncryption());
+             
+        }
     }
 }
 
@@ -1031,11 +1090,11 @@ hdfsFileInfo * hdfsListDirectory(hdfsFS fs, const char * path,
         size = status.size();
         retval = new hdfsFileInfo[size];
         memset(retval, 0, sizeof(hdfsFileInfo) * size);
-        ConstructHdfsFileInfo(&retval[0], status);
+        ConstructHdfsFileInfo(retval, status);
         *numEntries = size;
         return retval;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         hdfsFreeFileInfo(retval, size);
         errno = ENOMEM;
     } catch (...) {
@@ -1059,7 +1118,7 @@ hdfsFileInfo * hdfsGetPathInfo(hdfsFS fs, const char * path) {
         ConstructHdfsFileInfo(retval, status);
         return retval;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         hdfsFreeFileInfo(retval, 1);
         errno = ENOMEM;
     } catch (...) {
@@ -1071,29 +1130,41 @@ hdfsFileInfo * hdfsGetPathInfo(hdfsFS fs, const char * path) {
     return NULL;
 }
 
+void hdfsFreeEncryptionZoneInfo(hdfsEncryptionZoneInfo * infos, int numEntries) {
+    for (int i = 0; infos != NULL && i < numEntries; ++i) {
+        delete [] infos[i].mPath;
+        delete [] infos[i].mKeyName;
+    }
+    delete[] infos;
+}
+
 void hdfsFreeFileInfo(hdfsFileInfo * infos, int numEntries) {
     for (int i = 0; infos != NULL && i < numEntries; ++i) {
         delete [] infos[i].mGroup;
         delete [] infos[i].mName;
         delete [] infos[i].mOwner;
+        if (infos[i].mHdfsEncryptionFileInfo != NULL) {
+            delete [] infos[i].mHdfsEncryptionFileInfo;
+        }
     }
 
     delete[] infos;
 }
 
-char ** * hdfsGetHosts(hdfsFS fs, const char * path, tOffset start,
-                       tOffset length) {
-    PARAMETER_ASSERT(fs && path && strlen(path) > 0 && start >= 0, NULL, EINVAL);
-    char ** * retval = NULL;
+char ***hdfsGetHosts(hdfsFS fs, const char *path, tOffset start,
+                     tOffset length) {
+    PARAMETER_ASSERT(fs && path && strlen(path) > 0, NULL, EINVAL);
+    PARAMETER_ASSERT(start >= 0 && length > 0, NULL, EINVAL);
+    char ***retval = NULL;
 
     try {
         std::vector<Hdfs::BlockLocation> bls =
             fs->getFilesystem().getFileBlockLocations(path, start, length);
-        retval = new char ** [bls.size() + 1];
+        retval = new char **[bls.size() + 1];
         memset(retval, 0, sizeof(char **) * (bls.size() + 1));
 
         for (size_t i = 0; i < bls.size(); ++i) {
-            const std::vector<std::string> & hosts = bls[i].getHosts();
+            const std::vector<std::string> &hosts = bls[i].getHosts();
             retval[i] = new char *[hosts.size() + 1];
             memset(retval[i], 0, sizeof(char *) * (hosts.size() + 1));
 
@@ -1101,8 +1172,10 @@ char ** * hdfsGetHosts(hdfsFS fs, const char * path, tOffset start,
                 retval[i][j] = Strdup(hosts[j].c_str());
             }
         }
-    } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+
+        return retval;
+    } catch (const std::bad_alloc &e) {
+        SetErrorMessage("Out of memory");
         hdfsFreeHosts(retval);
         errno = ENOMEM;
     } catch (...) {
@@ -1111,10 +1184,10 @@ char ** * hdfsGetHosts(hdfsFS fs, const char * path, tOffset start,
         handleException(Hdfs::current_exception());
     }
 
-    return retval;
+    return NULL;
 }
 
-void hdfsFreeHosts(char ** *blockHosts) {
+void hdfsFreeHosts(char ***blockHosts) {
     if (blockHosts == NULL) {
         return;
     }
@@ -1136,7 +1209,7 @@ tOffset hdfsGetDefaultBlockSize(hdfsFS fs) {
     try {
         return fs->getFilesystem().getDefaultBlockSize();
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1153,7 +1226,7 @@ tOffset hdfsGetCapacity(hdfsFS fs) {
         Hdfs::FileSystemStats stat = fs->getFilesystem().getStats();
         return stat.getCapacity();
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1170,7 +1243,7 @@ tOffset hdfsGetUsed(hdfsFS fs) {
         Hdfs::FileSystemStats stat = fs->getFilesystem().getStats();
         return stat.getUsed();
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1189,7 +1262,7 @@ int hdfsChown(hdfsFS fs, const char * path, const char * owner,
         fs->getFilesystem().setOwner(path, owner, group);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1206,7 +1279,7 @@ int hdfsChmod(hdfsFS fs, const char * path, short mode) {
         fs->getFilesystem().setPermission(path, mode);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1223,7 +1296,7 @@ int hdfsUtime(hdfsFS fs, const char * path, tTime mtime, tTime atime) {
         fs->getFilesystem().setTimes(path, mtime, atime);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1240,7 +1313,7 @@ int hdfsTruncate(hdfsFS fs, const char * path, tOffset pos, int * shouldWait) {
         *shouldWait = !fs->getFilesystem().truncate(path, pos);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1257,7 +1330,7 @@ char * hdfsGetDelegationToken(hdfsFS fs, const char * renewer) {
         std::string token = fs->getFilesystem().getDelegationToken(renewer);
         return Strdup(token.c_str());
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1281,7 +1354,7 @@ int64_t hdfsRenewDelegationToken(hdfsFS fs, const char * token) {
     try {
         return fs->getFilesystem().renewDelegationToken(token);
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1298,7 +1371,7 @@ int hdfsCancelDelegationToken(hdfsFS fs, const char * token) {
         fs->getFilesystem().cancelDelegationToken(token);
         return 0;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1344,7 +1417,7 @@ Namenode * hdfsGetHANamenodes(const char * nameservice, int * size) {
         return hdfsGetConfiguredNamenodesInternal(nameservice, size,
                 DefaultConfig().getConfig());
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1362,7 +1435,7 @@ Namenode * hdfsGetHANamenodesWithConfig(const char * conf,
         return hdfsGetConfiguredNamenodesInternal(nameservice, size,
                 DefaultConfig(conf).getConfig());
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         errno = ENOMEM;
     } catch (...) {
         SetLastException(Hdfs::current_exception());
@@ -1418,14 +1491,14 @@ BlockLocation * hdfsGetFileBlockLocations(hdfsFS fs, const char * path,
         size = locations.size();
         retval = new BlockLocation[size];
 
-        for (size_t i = 0; i < size; ++i) {
+        for (int i = 0; i < size; ++i) {
             ConstructFileBlockLocation(locations[i], &retval[i]);
         }
 
         *numOfBlock = size;
         return retval;
     } catch (const std::bad_alloc & e) {
-        SetConstErrorMessage("Out of memory");
+        SetErrorMessage("Out of memory");
         hdfsFreeFileBlockLocations(retval, size);
         errno = ENOMEM;
     } catch (...) {
@@ -1457,6 +1530,75 @@ void hdfsFreeFileBlockLocations(BlockLocation * locations, int numOfBlock) {
     delete [] locations;
 }
 
+int hdfsCreateEncryptionZone(hdfsFS fs, const char * path, const char * keyName) {
+    PARAMETER_ASSERT(fs && path && strlen(path) > 0 && keyName && strlen(keyName) > 0, -1, EINVAL);
+
+    try {
+        return fs->getFilesystem().createEncryptionZone(path, keyName) ? 0 : -1;
+    } catch (const std::bad_alloc & e) {
+        SetErrorMessage("Out of memory");
+        errno = ENOMEM;
+    } catch (...) {
+        SetLastException(Hdfs::current_exception());
+        handleException(Hdfs::current_exception());
+    }
+
+    return -1;
+}
+
+hdfsEncryptionZoneInfo * hdfsGetEZForPath(hdfsFS fs, const char * path) {
+    PARAMETER_ASSERT(fs && path && strlen(path) > 0, NULL, EINVAL);
+    hdfsEncryptionZoneInfo * retval = NULL;
+
+    try {
+        retval = new hdfsEncryptionZoneInfo[1];
+        memset(retval, 0, sizeof(hdfsEncryptionZoneInfo));
+        std::vector<Hdfs::EncryptionZoneInfo> enStatus(1);
+        enStatus[0] = fs->getFilesystem().getEZForPath(path);
+        ConstructHdfsEncryptionZoneInfo(retval, enStatus);
+        return retval;
+    } catch (const std::bad_alloc & e) {
+        SetErrorMessage("Out of memory");
+        hdfsFreeEncryptionZoneInfo(retval, 1);
+        /* If out of memory error occurred, free hdfsEncryptionZoneInfo array's memory. */
+        errno = ENOMEM;
+    } catch (...) {
+        SetLastException(Hdfs::current_exception());
+        hdfsFreeEncryptionZoneInfo(retval, 1);
+        /* If any exceptions throw out, free hdfsEncryptionZoneInfo array's memory. */
+        handleException(Hdfs::current_exception());
+    }
+
+    return NULL;
+}
+
+
+hdfsEncryptionZoneInfo * hdfsListEncryptionZones(hdfsFS fs, int * numEntries) {
+    PARAMETER_ASSERT(fs, NULL, EINVAL);
+    hdfsEncryptionZoneInfo * retval = NULL;
+    int size = 0;
+
+    try {
+        std::vector<Hdfs::EncryptionZoneInfo> enStatus =
+            fs->getFilesystem().listAllEncryptionZoneItems();
+        size = enStatus.size();
+        retval = new hdfsEncryptionZoneInfo[size];
+        memset(retval, 0, sizeof(hdfsEncryptionZoneInfo) * size);
+        ConstructHdfsEncryptionZoneInfo(&retval[0], enStatus);
+        *numEntries = size;
+        return retval;
+    } catch (const std::bad_alloc & e) {
+        SetErrorMessage("Out of memory");
+        /* If out of memory error occurred, free hdfsEncryptionZoneInfo array's memory. */ 
+        hdfsFreeEncryptionZoneInfo(retval, size);
+    } catch (...) {
+        SetLastException(Hdfs::current_exception());
+        /* If any exceptions throw out, free hdfsEncryptionZoneInfo array's memory. */
+        hdfsFreeEncryptionZoneInfo(retval, size);
+        handleException(Hdfs::current_exception());
+    }
+    return NULL;
+}
 #ifdef __cplusplus
 }
 #endif

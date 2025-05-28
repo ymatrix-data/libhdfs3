@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -39,11 +33,17 @@ namespace Internal {
 enum AuthMethod {
     SIMPLE = 80, KERBEROS = 81, //"GSSAPI"
     TOKEN = 82, //"DIGEST-MD5"
-    UNKNOWN = 255
+    UNSURENESS = 255
 };
 
 enum AuthProtocol {
     NONE = 0, SASL = -33
+};
+
+enum Protection {
+    AUTH = 1, // Authentication
+    INT = 2, // Integrity
+    CONF = 4 // Privacy
 };
 
 class RpcAuth {

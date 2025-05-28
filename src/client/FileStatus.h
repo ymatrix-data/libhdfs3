@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -29,8 +23,9 @@
 #define _HDFS_LIBHDFS3_CLIENT_FILESTATUS_H_
 
 #include "Permission.h"
+#include "client/FileEncryptionInfo.h"
 
-#include <string>
+#include <string.h>
 
 namespace Hdfs {
 
@@ -149,6 +144,21 @@ public:
         return !symlink.empty();
     }
 
+    /**
+    * Get encryption information for a file.
+    */
+    FileEncryptionInfo* getFileEncryption(){
+        return &fileEncryption;
+    }
+
+    /**
+    * Is an encryption file?
+    * @return true is this is an encryption file
+    */
+    bool isFileEncrypted() const {
+        return fileEncryption.getKey().length() > 0 && fileEncryption.getKeyName().length() > 0;
+    }
+
 private:
     bool isdir;
     int64_t atime;
@@ -161,6 +171,7 @@ private:
     std::string owner;
     std::string path;
     std::string symlink;
+    FileEncryptionInfo fileEncryption;
 };
 
 }

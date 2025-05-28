@@ -1,10 +1,4 @@
 /********************************************************************
- * Copyright (c) 2013 - 2014, Pivotal Inc.
- * All rights reserved.
- *
- * Author: Zhanwei Wang
- ********************************************************************/
-/********************************************************************
  * 2014 -
  * open source under Apache License Version 2.0
  ********************************************************************/
@@ -157,23 +151,6 @@ void HWCrc32c::updateInt64(const char * b, int len) {
     case 0:
         break;
     }
-}
-
-}
-}
-
-#else
-namespace Hdfs {
-namespace Internal {
-
-bool HWCrc32c::available() {
-    return false;
-}
-
-void HWCrc32c::update(const void * b, int len) {
-}
-
-void HWCrc32c::updateInt64(const char * b, int len) {
 }
 
 }
